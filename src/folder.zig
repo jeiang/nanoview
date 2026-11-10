@@ -1,6 +1,8 @@
 //! The picture files of one folder, in a fixed buffer, in display order.
 const std = @import("std");
 const builtin = @import("builtin");
+const paths = @import("paths.zig");
+const sort_order = @import("sort_order.zig");
 const assert = std.debug.assert;
 
 pub const entries_max: u32 = 16384;
@@ -15,13 +17,14 @@ pub const extensions: []const []const u8 = if (builtin.os.tag == .macos)
 else
     &.{ "png", "jpg", "jpeg", "gif" };
 
-pub const Entry = struct { offset: u32, len: u16 };
+pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
 
 pub const Folder = struct {
     names: [names_bytes_max]u8 = undefined,
     names_len: u32 = 0,
     entries: [entries_max]Entry = undefined,
     count: u32 = 0,
+    order: sort_order.Order = .{},
 
     pub fn reset(f: *Folder) void {
         f.names_len = 0;
@@ -50,7 +53,16 @@ pub const Folder = struct {
     }
 
     fn entry_less(f: *const Folder, a: Entry, b: Entry) bool {
-        return natural_less(f.slice(a), f.slice(b));
+        const na = f.slice(a);
+        const nb = f.slice(b);
+        const primary: std.math.Order = switch (f.order.key) {
+            .name => if (natural_less(na, nb)) .lt else if (natural_less(nb, na)) .gt else .eq,
+            .kind => std.ascii.orderIgnoreCase(extension(na), extension(nb)),
+            else => std.math.order(a.value, b.value),
+        };
+        // Only the primary key reverses: ties stay in ascending name order.
+        if (primary != .eq) return if (f.order.ascending) primary == .lt else primary == .gt;
+        return natural_less(na, nb);
     }
 
     fn slice(f: *const Folder, e: Entry) []const u8 {
@@ -85,9 +97,10 @@ pub const Folder = struct {
     }
 
     /// A folder over the limits lists what fits.
-    pub fn scan(f: *Folder, io: std.Io, dir_path: []const u8) !void {
+    pub fn scan(f: *Folder, io: std.Io, dir_path: []const u8, order: sort_order.Order) !void {
         assert(dir_path.len > 0);
         f.reset();
+        f.order = order;
         var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
         defer dir.close(io);
         var it = dir.iterate();
@@ -97,10 +110,92 @@ pub const Folder = struct {
             if (entry.kind != .file and entry.kind != .sym_link) continue;
             if (!f.add(entry.name)) break;
         }
+        if (order.key != .name and order.key != .kind) f.fill_values(io, dir_path);
         f.sort();
         assert(f.count <= entries_max);
     }
+
+    /// A failed stat leaves 0.
+    fn fill_values(f: *Folder, io: std.Io, dir_path: []const u8) void {
+        assert(f.order.key != .name and f.order.key != .kind);
+        var buf: [paths.path_max]u8 = undefined;
+        var i: u32 = 0;
+        while (i < f.count) : (i += 1) {
+            const e = &f.entries[i];
+            e.value = 0;
+            const file_path = paths.join(dir_path, f.slice(e.*), &buf) orelse continue;
+            e.value = switch (f.order.key) {
+                .size => if (std.Io.Dir.cwd().statFile(io, file_path, .{})) |st|
+                    @intCast(@min(st.size, std.math.maxInt(i64)))
+                else |_|
+                    0,
+                .date_modified => if (std.Io.Dir.cwd().statFile(io, file_path, .{})) |st|
+                    @intCast(st.mtime.nanoseconds)
+                else |_|
+                    0,
+                .date_created => file_times(file_path).created,
+                .date_added => file_times(file_path).added,
+                .name, .kind => unreachable,
+            };
+        }
+        assert(i == f.count);
+    }
 };
+
+fn extension(file_name: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, file_name, '.') orelse return "";
+    assert(dot < file_name.len);
+    return file_name[dot + 1 ..];
+}
+
+const FileTimes = struct { created: i64 = 0, added: i64 = 0 };
+
+const attr = struct {
+    const List = extern struct {
+        bitmapcount: u16 = 5, // ATTR_BIT_MAP_COUNT
+        reserved: u16 = 0,
+        commonattr: u32,
+        volattr: u32 = 0,
+        dirattr: u32 = 0,
+        fileattr: u32 = 0,
+        forkattr: u32 = 0,
+    };
+    const cmn_crtime: u32 = 0x00000200;
+    const cmn_addedtime: u32 = 0x10000000;
+    /// The reply's length word and two packed timespecs.
+    const reply_size: u32 = 4 + 16 + 16;
+    extern "c" fn getattrlist(
+        path: [*:0]const u8,
+        list: *List,
+        buf: *anyopaque,
+        size: usize,
+        options: c_uint,
+    ) c_int;
+};
+
+/// Creation and added dates in nanoseconds (macOS; other systems are never
+/// asked for these keys). A failure gives zeros.
+fn file_times(file_path: []const u8) FileTimes {
+    if (builtin.os.tag != .macos) return .{};
+    var z: [paths.path_max + 1]u8 = undefined;
+    if (file_path.len > paths.path_max) return .{};
+    @memcpy(z[0..file_path.len], file_path);
+    z[file_path.len] = 0;
+    var list: attr.List = .{ .commonattr = attr.cmn_crtime | attr.cmn_addedtime };
+    var reply: [64]u8 align(8) = @splat(0);
+    const path_z: [*:0]const u8 = @ptrCast(&z);
+    if (attr.getattrlist(path_z, &list, &reply, reply.len, 0) != 0) return .{};
+    const len = std.mem.readInt(u32, reply[0..4], .little);
+    if (len != attr.reply_size) return .{};
+    return .{ .created = timespec_ns(reply[4..20]), .added = timespec_ns(reply[20..36]) };
+}
+
+fn timespec_ns(bytes: *const [16]u8) i64 {
+    const sec = std.mem.readInt(i64, bytes[0..8], .little);
+    const nsec = std.mem.readInt(i64, bytes[8..16], .little);
+    assert(nsec >= 0 and nsec < std.time.ns_per_s);
+    return sec *| std.time.ns_per_s +| nsec;
+}
 
 pub fn is_image_name(file_name: []const u8) bool {
     if (file_name.len == 0 or file_name[0] == '.') return false;
@@ -194,4 +289,26 @@ test "sort, find and remove keep natural order" {
     try testing.expectEqualStrings("a2.png", f.name(0));
     try testing.expectEqualStrings("a10.png", f.name(1));
     try testing.expectEqual(@as(?u32, null), f.find("a1.png"));
+}
+
+test "sort follows the order's key and direction" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    try testing.expect(f.add("b.png"));
+    try testing.expect(f.add("a.png"));
+    f.entries[0].value = 1;
+    f.entries[1].value = 2;
+    f.order = .{ .key = .date_modified, .ascending = true };
+    f.sort();
+    try testing.expectEqualStrings("b.png", f.name(0));
+    f.order.ascending = false;
+    f.sort();
+    try testing.expectEqualStrings("a.png", f.name(0));
+    f.reset();
+    try testing.expect(f.add("a.png"));
+    try testing.expect(f.add("z.jpg"));
+    f.order = .{ .key = .kind, .ascending = true };
+    f.sort();
+    try testing.expectEqualStrings("z.jpg", f.name(0));
 }

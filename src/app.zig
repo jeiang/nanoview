@@ -6,6 +6,7 @@ const folder_mod = @import("folder.zig");
 const paths = @import("paths.zig");
 const viewport_mod = @import("viewport.zig");
 const orientation = @import("orientation.zig");
+const sort_order = @import("sort_order.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -57,17 +58,21 @@ pub const State = struct {
     /// The single entry for an argument, the dialog, a drop and macOS open-file.
     pub fn open_path(s: *State, file_path: []const u8) void {
         assert(s.path_len <= paths.path_max);
-        if (file_path.len == 0 or file_path.len > paths.path_max) {
-            s.fail();
-            return;
-        }
-        @memcpy(s.path_buf[0..file_path.len], file_path);
-        s.path_len = @intCast(file_path.len);
+        // No picture to name in a failure: an unusable path changes nothing.
+        if (file_path.len == 0 or file_path.len > paths.path_max) return;
+        // Absolute, so the parent folder and its `.DS_Store` can be found.
+        var real_buf: [paths.path_max]u8 = undefined;
+        const real = if (std.Io.Dir.cwd().realPathFile(s.io, file_path, &real_buf)) |len|
+            real_buf[0..len]
+        else |_|
+            file_path;
+        @memcpy(s.path_buf[0..real.len], real);
+        s.path_len = @intCast(real.len);
         const parent = std.fs.path.dirname(s.path()) orelse ".";
         @memcpy(s.dir_buf[0..parent.len], parent);
         s.dir_len = @intCast(parent.len);
         // A folder that cannot be listed still shows the file, alone.
-        s.folder.scan(s.io, s.dir()) catch s.folder.reset();
+        s.folder.scan(s.io, s.dir(), sort_order.detect(s.io, s.dir())) catch s.folder.reset();
         s.index = s.folder.find(s.basename());
         s.load();
         assert(s.status != .empty);
