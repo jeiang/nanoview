@@ -22,6 +22,16 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run nanoview").dependOn(&run.step);
 
+    if (target.result.os.tag == .macos) {
+        const bundle_exe = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{
+            .custom = "nanoview.app/Contents/MacOS",
+        } } });
+        const plist = b.addInstallFile(b.path("macos/Info.plist"), "nanoview.app/Contents/Info.plist");
+        const app = b.step("app", "Build zig-out/nanoview.app");
+        app.dependOn(&bundle_exe.step);
+        app.dependOn(&plist.step);
+    }
+
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tests.zig"),
