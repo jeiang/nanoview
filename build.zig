@@ -23,6 +23,15 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("windows/nanoview.ico"),
         });
     }
+    if (target.result.os.tag == .linux) {
+        // The launcher's entry and its icon (a Wayland shell reads the window's icon from
+        // them too); main.zig hands the same picture to the window for X11.
+        exe.root_module.addAnonymousImport("nanoview.png", .{
+            .root_source_file = b.path("linux/nanoview.png"),
+        });
+        b.installFile("linux/nanoview.desktop", "share/applications/nanoview.desktop");
+        b.installFile("linux/nanoview.png", "share/icons/hicolor/256x256/apps/nanoview.png");
+    }
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -43,7 +52,7 @@ pub fn build(b: *std.Build) void {
         app.dependOn(&icns.step);
     }
 
-    const icon = b.step("icon", "Redraw the icon: macos/ and windows/ (macOS host)");
+    const icon = b.step("icon", "Redraw the icon: macos/, windows/ and linux/ (macOS host)");
     if (b.graph.host.result.os.tag == .macos) {
         const icon_exe = b.addExecutable(.{
             .name = "icon",

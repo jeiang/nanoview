@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nanoview
+GenericName=Image Viewer
+Comment=A small, fast image viewer
+Exec=nanoview %f
+Icon=nanoview
+Terminal=false
+Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/gif;
+StartupWMClass=nanoview

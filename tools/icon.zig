@@ -5,7 +5,8 @@
 //!
 //! Every shape is a signed distance, so its edge is anti-aliased. This draws
 //! macos/icon.png, then the Mac's own sips and iconutil make
-//! macos/AppIcon.icns from it, and sips the frames of windows/nanoview.ico.
+//! macos/AppIcon.icns from it, and sips the frames of windows/nanoview.ico
+//! and linux/nanoview.png.
 //! Run from the repository's root (build.zig does).
 const std = @import("std");
 const assert = std.debug.assert;
@@ -60,10 +61,12 @@ const scratch = "/tmp/nanoview-icon";
 const iconset = scratch ++ "/AppIcon.iconset";
 /// The iconset's sizes, each also at twice the size (`@2x`).
 const iconset_sides = [_]u32{ 16, 32, 128, 256, 512 };
-/// Windows has no margin around an icon: the tile and the near part of its
-/// shadow, cut from the middle of the canvas.
-const ico_crop_side = 880;
-const ico_crop_path = scratch ++ "/windows.png";
+/// Windows and Linux have no margin around an icon: the tile and the near
+/// part of its shadow, cut from the middle of the canvas.
+const crop_side = 880;
+const crop_path = scratch ++ "/cropped.png";
+const linux_path = "linux/nanoview.png";
+const linux_side = 256;
 const ico_sides = [_]u32{ 16, 32, 48, 256 };
 const ico_header_bytes = 6;
 const ico_entry_bytes = 16;
@@ -90,19 +93,20 @@ pub fn main(init: std.process.Init) !void {
         try resize(io, arena, .{ .from = icon_path, .side = side * 2, .to = two });
     }
     try run(io, arena, &.{ "iconutil", "-c", "icns", "-o", icns_path, iconset });
+    const crop = std.fmt.comptimePrint("{d}", .{crop_side});
+    try run(io, arena, &.{ "sips", "-c", crop, crop, icon_path, "--out", crop_path });
     try writeIco(io, arena);
+    try resize(io, arena, .{ .from = crop_path, .side = linux_side, .to = linux_path });
 }
 
 /// windows/nanoview.ico: one PNG frame for each of `ico_sides`.
 fn writeIco(io: Io, arena: std.mem.Allocator) !void {
-    const crop = std.fmt.comptimePrint("{d}", .{ico_crop_side});
-    try run(io, arena, &.{ "sips", "-c", crop, crop, icon_path, "--out", ico_crop_path });
     var directory: Io.Writer.Allocating = .init(arena);
     var frames: Io.Writer.Allocating = .init(arena);
     try directory.writer.writeAll(&.{ 0, 0, 1, 0, ico_sides.len, 0 });
     for (ico_sides) |side| {
         const path = try std.fmt.allocPrint(arena, "{s}/ico_{d}.png", .{ scratch, side });
-        try resize(io, arena, .{ .from = ico_crop_path, .side = side, .to = path });
+        try resize(io, arena, .{ .from = crop_path, .side = side, .to = path });
         const limit: Io.Limit = .limited(ico_frame_bytes_max);
         const frame = try Io.Dir.cwd().readFileAlloc(io, path, arena, limit);
         const offset = ico_header_bytes + ico_entry_bytes * ico_sides.len + frames.written().len;
