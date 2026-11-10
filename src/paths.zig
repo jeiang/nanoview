@@ -1,4 +1,4 @@
-//! File URLs from drops, and path joins, into fixed buffers.
+//! File URLs from drops, path joins and whole-file reads, into fixed buffers.
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -72,6 +72,20 @@ pub fn join(dir: []const u8, name: []const u8, out: *[path_max]u8) ?[]const u8 {
     const result = out[0..total];
     assert(std.mem.endsWith(u8, result, name));
     return result;
+}
+
+/// The whole file into `buffer`, without an allocator: an allocating read
+/// grows its array and could ask a fixed buffer for more than the file needs.
+pub fn read_file(io: std.Io, path: []const u8, buffer: []u8) ![]u8 {
+    assert(path.len > 0 and buffer.len > 0);
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const size = try file.length(io);
+    if (size > buffer.len) return error.FileTooBig;
+    const len = try file.readPositionalAll(io, buffer[0..@intCast(size)], 0);
+    if (len != size) return error.FileChanged;
+    assert(len <= buffer.len);
+    return buffer[0..len];
 }
 
 const testing = std.testing;
