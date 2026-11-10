@@ -10,6 +10,7 @@ pub fn detect(io: std.Io, dir_path: []const u8) Order {
     std.debug.assert(dir_path.len > 0);
     const result: Order = switch (builtin.os.tag) {
         .macos => @import("ds_store.zig").detect(io, dir_path),
+        .windows => @import("explorer_sort.zig").detect(dir_path),
         else => .{},
     };
     // Other systems are never asked for the dates only macOS keeps.

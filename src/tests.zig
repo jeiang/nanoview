@@ -14,6 +14,7 @@ test {
     _ = @import("bplist.zig");
     _ = @import("ds_store.zig");
     _ = @import("sort_order.zig");
+    _ = @import("explorer_sort.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the stack.
