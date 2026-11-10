@@ -91,6 +91,11 @@ the archives with `tools/package.sh`, and publishes a GitHub Release with that c
 section as notes. `.github/workflows/ci.yml` runs format, tests, cross builds and
 `nix flake check` on macOS and Linux for pushes to `main` and pull requests.
 
+The release signs the macOS apps with the "Developer ID Application" identity and notarizes
+them with an App Store Connect API key, from the repository secrets listed at the top of
+`release.yml`; it fails when one is missing. Locally, `tools/package.sh` does the same when
+`CODESIGN_IDENTITY` and `NOTARY_KEY_PATH`, `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` are set.
+
 ## Git
 
 Use Conventional Commits. Do not commit `zig-out/`, `.zig-cache/`, `zig-pkg/`, `dist/` or

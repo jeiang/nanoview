@@ -15,6 +15,8 @@ section that matches its tag.
 
 ### Changed
 
+- The macOS release apps are signed with a Developer ID and notarized, so Gatekeeper opens them
+  without the `xattr` step.
 - The Linux release archive holds `bin/nanoview` and `share/` (the desktop entry and icon)
   instead of the bare program.
 
