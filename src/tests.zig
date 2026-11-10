@@ -11,3 +11,10 @@ test "the empty window shows the hint" {
     defer t.deinit();
     try std.testing.expect(t.containsText("Drop an image"));
 }
+
+test {
+    _ = @import("viewport.zig");
+    _ = @import("folder.zig");
+    _ = @import("paths.zig");
+    _ = @import("orientation.zig");
+}
