@@ -7,6 +7,8 @@ section that matches its tag.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-10
+
 ### Added
 
 - An app icon for the macOS bundle, the Windows program (Explorer, title bar and taskbar) and
@@ -47,5 +49,6 @@ section that matches its tag.
 - Linux and Windows builds show PNG, JPEG and the first frame of GIF, and have not been
   tested on those systems yet. On Linux nanoview needs GTK 3 or 4 and OpenGL at run time.
 
-[Unreleased]: https://github.com/jeiang/nanoview/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jeiang/nanoview/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jeiang/nanoview/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jeiang/nanoview/releases/tag/v0.1.0
