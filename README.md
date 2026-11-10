@@ -1,3 +1,5 @@
+<p align="center"><img src="macos/icon.png" alt="nanoview's icon" width="96" height="96"></p>
+
 # nanoview
 
 A small, fast image viewer in the style of [qView](https://interversehq.com/qview/), written in
