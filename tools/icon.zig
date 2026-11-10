@@ -5,7 +5,8 @@
 //!
 //! Every shape is a signed distance, so its edge is anti-aliased. This draws
 //! macos/icon.png, then the Mac's own sips and iconutil make
-//! macos/AppIcon.icns from it. Run from the repository's root (build.zig does).
+//! macos/AppIcon.icns from it, and sips the frames of windows/nanoview.ico.
+//! Run from the repository's root (build.zig does).
 const std = @import("std");
 const assert = std.debug.assert;
 const flate = std.compress.flate;
@@ -54,9 +55,19 @@ extern "c" fn erfc(x: f64) f64;
 
 const icon_path = "macos/icon.png";
 const icns_path = "macos/AppIcon.icns";
-const iconset = "/tmp/nanoview-icon/AppIcon.iconset";
+const ico_path = "windows/nanoview.ico";
+const scratch = "/tmp/nanoview-icon";
+const iconset = scratch ++ "/AppIcon.iconset";
 /// The iconset's sizes, each also at twice the size (`@2x`).
 const iconset_sides = [_]u32{ 16, 32, 128, 256, 512 };
+/// Windows has no margin around an icon: the tile and the near part of its
+/// shadow, cut from the middle of the canvas.
+const ico_crop_side = 880;
+const ico_crop_path = scratch ++ "/windows.png";
+const ico_sides = [_]u32{ 16, 32, 48, 256 };
+const ico_header_bytes = 6;
+const ico_entry_bytes = 16;
+const ico_frame_bytes_max = 1 << 20;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -72,20 +83,48 @@ pub fn main(init: std.process.Init) !void {
         const one = try std.fmt.allocPrint(arena, "{s}/icon_{d}x{d}.png", .{
             iconset, side, side,
         });
-        try resize(io, arena, side, one);
+        try resize(io, arena, .{ .from = icon_path, .side = side, .to = one });
         const two = try std.fmt.allocPrint(arena, "{s}/icon_{d}x{d}@2x.png", .{
             iconset, side, side,
         });
-        try resize(io, arena, side * 2, two);
+        try resize(io, arena, .{ .from = icon_path, .side = side * 2, .to = two });
     }
     try run(io, arena, &.{ "iconutil", "-c", "icns", "-o", icns_path, iconset });
+    try writeIco(io, arena);
 }
 
-/// macos/icon.png made `side` pixels square by sips.
-fn resize(io: Io, arena: std.mem.Allocator, side: u32, to: []const u8) !void {
-    assert(side > 0 and side <= size);
-    const side_text = try std.fmt.allocPrint(arena, "{d}", .{side});
-    try run(io, arena, &.{ "sips", "-z", side_text, side_text, icon_path, "--out", to });
+/// windows/nanoview.ico: one PNG frame for each of `ico_sides`.
+fn writeIco(io: Io, arena: std.mem.Allocator) !void {
+    const crop = std.fmt.comptimePrint("{d}", .{ico_crop_side});
+    try run(io, arena, &.{ "sips", "-c", crop, crop, icon_path, "--out", ico_crop_path });
+    var directory: Io.Writer.Allocating = .init(arena);
+    var frames: Io.Writer.Allocating = .init(arena);
+    try directory.writer.writeAll(&.{ 0, 0, 1, 0, ico_sides.len, 0 });
+    for (ico_sides) |side| {
+        const path = try std.fmt.allocPrint(arena, "{s}/ico_{d}.png", .{ scratch, side });
+        try resize(io, arena, .{ .from = ico_crop_path, .side = side, .to = path });
+        const limit: Io.Limit = .limited(ico_frame_bytes_max);
+        const frame = try Io.Dir.cwd().readFileAlloc(io, path, arena, limit);
+        const offset = ico_header_bytes + ico_entry_bytes * ico_sides.len + frames.written().len;
+        // A side of 256 is written as 0; then no palette, one plane, 32 bits.
+        const side_byte: u8 = @truncate(side);
+        try directory.writer.writeAll(&.{ side_byte, side_byte, 0, 0, 1, 0, 32, 0 });
+        try directory.writer.writeInt(u32, @intCast(frame.len), .little);
+        try directory.writer.writeInt(u32, @intCast(offset), .little);
+        try frames.writer.writeAll(frame);
+    }
+    assert(directory.written().len == ico_header_bytes + ico_entry_bytes * ico_sides.len);
+    const bytes = try std.mem.concat(arena, u8, &.{ directory.written(), frames.written() });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = ico_path, .data = bytes });
+}
+
+const Resize = struct { from: []const u8, side: u32, to: []const u8 };
+
+/// `from` made `side` pixels square by sips.
+fn resize(io: Io, arena: std.mem.Allocator, options: Resize) !void {
+    assert(options.side > 0 and options.side <= size);
+    const side = try std.fmt.allocPrint(arena, "{d}", .{options.side});
+    try run(io, arena, &.{ "sips", "-z", side, side, options.from, "--out", options.to });
 }
 
 /// Runs `argv`; unless it exits 0, prints what it said and fails.

@@ -23,6 +23,7 @@ pub fn main(init: std.process.Init) !void {
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{
         .title = "nanoview",
+        .icon = if (builtin.os.tag == .windows) @embedFile("nanoview.ico") else null,
         .width = 800,
         .height = 600,
         .min_width = 320,

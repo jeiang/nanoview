@@ -16,7 +16,7 @@ find the macOS frameworks.
 | Format check | `zig fmt --check build.zig src` |
 | Run | `zig build run -- PICTURE` |
 | macOS bundle | `zig build app` (gives `zig-out/nanoview.app`) |
-| Redraw the icon | `zig build icon` (macOS host; writes `macos/icon.png`, `macos/AppIcon.icns`) |
+| Redraw the icon | `zig build icon` (macOS host; writes `macos/icon.png`, `macos/AppIcon.icns`, `windows/nanoview.ico`) |
 | Cross builds | `zig build -Dtarget=x86_64-windows-gnu`, `-Dtarget=x86_64-linux-gnu` |
 | Release archives | `./tools/package.sh dist` (macOS host only) |
 | Nix package and checks | `nix build`, `nix flake check -L` |
@@ -42,7 +42,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/paths.zig` | `file://` URLs, path joins, fixed-buffer file reads |
 | `src/tests.zig` | Test root and `ui.Tester` tests |
 | `tools/make_ds_store_fixture.py` | Writes `src/testdata/list_date_modified.DS_Store` |
-| `tools/icon.zig` | Draws the app icon from signed distances; `sips` and `iconutil` make the `.icns` |
+| `tools/icon.zig` | Draws the app icon from signed distances; `sips` and `iconutil` make the `.icns` and the `.ico` frames |
 
 ## Code rules (Tiger Style)
 

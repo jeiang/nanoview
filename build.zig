@@ -15,7 +15,14 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "nanoui", .module = nanoui }},
         }),
     });
-    if (target.result.os.tag == .windows) exe.subsystem = .windows;
+    if (target.result.os.tag == .windows) {
+        exe.subsystem = .windows;
+        // The resource is Explorer's icon; main.zig hands the same file to the window.
+        exe.root_module.addWin32ResourceFile(.{ .file = b.path("windows/nanoview.rc") });
+        exe.root_module.addAnonymousImport("nanoview.ico", .{
+            .root_source_file = b.path("windows/nanoview.ico"),
+        });
+    }
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
@@ -36,7 +43,7 @@ pub fn build(b: *std.Build) void {
         app.dependOn(&icns.step);
     }
 
-    const icon = b.step("icon", "Redraw macos/icon.png and macos/AppIcon.icns (macOS host)");
+    const icon = b.step("icon", "Redraw the icon: macos/ and windows/ (macOS host)");
     if (b.graph.host.result.os.tag == .macos) {
         const icon_exe = b.addExecutable(.{
             .name = "icon",

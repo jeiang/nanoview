@@ -9,7 +9,8 @@ section that matches its tag.
 
 ### Added
 
-- An app icon for the macOS bundle: a framed landscape, drawn by `zig build icon`.
+- An app icon for the macOS bundle and the Windows program (Explorer, title bar and taskbar):
+  a framed landscape, drawn by `zig build icon`.
 
 ## [0.1.0] - 2026-11-10
 
