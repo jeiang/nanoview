@@ -37,6 +37,7 @@
           ./build.zig.zon
           ./src
           ./macos
+          ./linux
         ];
       };
     in
