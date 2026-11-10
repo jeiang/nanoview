@@ -10,8 +10,21 @@ permissions:
 jobs:
   release:
     # macOS builds every target: the macOS ones need the SDK, the rest cross-compile.
+    # The macOS apps are signed with a Developer ID and notarized with these repository secrets:
+    #   MACOS_CERT_P12       base64 of the "Developer ID Application" .p12
+    #   MACOS_CERT_PASSWORD  its password
+    #   AC_API_KEY_P8        the App Store Connect API key (the .p8's contents)
+    #   AC_API_KEY_ID        its key id
+    #   AC_API_ISSUER_ID     its issuer id
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Notarization waits on Apple.
+    timeout-minutes: 60
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+      AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+      AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
@@ -25,6 +38,37 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Test
         run: nix develop -c zig build test --summary all
+      - name: Signing identity and notary key
+        run: |
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD AC_API_KEY_P8 AC_API_KEY_ID AC_API_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "repository secret $name is not set" >&2
+              exit 1
+            fi
+          done
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          pass="$(uuidgen)"
+          security create-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$pass" "$keychain"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          # Let codesign use the key without a prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$pass" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          test -n "$identity"
+          printf '%s' "$AC_API_KEY_P8" > "$RUNNER_TEMP/ac_api_key.p8"
+          {
+            echo "CODESIGN_IDENTITY=$identity"
+            echo "NOTARY_KEY_PATH=$RUNNER_TEMP/ac_api_key.p8"
+            echo "NOTARY_KEY_ID=$AC_API_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$AC_API_ISSUER_ID"
+          } >> "$GITHUB_ENV"
       - name: Package
         run: nix develop -c ./tools/package.sh dist
       - name: Release notes from CHANGELOG.md
