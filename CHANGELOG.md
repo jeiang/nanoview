@@ -13,6 +13,11 @@ section that matches its tag.
   Linux (installed with a desktop entry under `share/`, and set on the window under X11):
   a framed landscape, drawn by `zig build icon`.
 
+### Changed
+
+- The Linux release archive holds `bin/nanoview` and `share/` (the desktop entry and icon)
+  instead of the bare program.
+
 ## [0.1.0] - 2026-11-10
 
 ### Added

@@ -13,6 +13,8 @@ macOS first; Linux and Windows builds come from the same code.
 Download an archive from the [releases page](https://github.com/jeiang/nanoview/releases).
 The macOS app is not notarized; after unzipping, run
 `xattr -dr com.apple.quarantine nanoview.app` once.
+The Linux archive holds `bin/` and `share/` (a desktop entry and the icon); unpack it over a
+prefix, for example `tar -xzf nanoview-*.tar.gz -C ~/.local`.
 
 With Nix:
 
