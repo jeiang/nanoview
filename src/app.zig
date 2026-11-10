@@ -137,6 +137,52 @@ pub const State = struct {
         if (len > 0) s.open_path(buf[0..len]);
     }
 
+    /// No confirmation: the trash is recoverable.
+    pub fn trash(s: *State) void {
+        if (s.status == .empty) return;
+        assert(s.path_len > 0);
+        if (!nanoui.shell.trash(s.path())) return;
+        if (s.index) |i| {
+            s.folder.remove(i);
+            if (s.folder.count == 0) {
+                s.clear();
+            } else {
+                s.show_index(@min(i, s.folder.count - 1));
+            }
+        } else if (s.folder.count > 0) {
+            s.step(1);
+        } else {
+            s.clear();
+        }
+        assert(s.status == .empty or s.path_len > 0);
+    }
+
+    /// Back to the empty window.
+    fn clear(s: *State) void {
+        s.status = .empty;
+        s.bytes = "";
+        s.index = null;
+        s.path_len = 0;
+        s.generation +%= 1;
+        if (s.window) |w| {
+            w.setTitle("nanoview");
+            w.redraw();
+        }
+        assert(s.status == .empty);
+    }
+
+    pub fn reveal(s: *const State) void {
+        if (s.status == .empty) return;
+        assert(s.path_len > 0);
+        nanoui.shell.showInFolder(s.path());
+    }
+
+    pub fn copy_path(s: *const State) void {
+        if (s.status == .empty) return;
+        assert(s.path_len > 0);
+        nanoui.clipboard.writeText(s.path());
+    }
+
     pub fn on_open_files(ctx: *anyopaque, files: []const []const u8) void {
         const s: *State = @ptrCast(@alignCast(ctx));
         assert(s.path_len <= paths.path_max);

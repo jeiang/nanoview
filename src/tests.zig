@@ -110,3 +110,16 @@ test "a file that is not a picture fails visibly" {
     try testing.expectEqual(app.Status.failed, f.state.status);
     try testing.expect(f.tester.containsText("Cannot show notes.txt"));
 }
+
+test "r turns the view a quarter and i shows the upright size" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("wide.png", 20, 10);
+    try f.open("wide.png");
+    _ = f.tester.shortcut(.{ .key = 'r' });
+    try testing.expectEqual(@as(f32, 10), f.state.viewport.image_w);
+    try testing.expectEqual(@as(f32, 20), f.state.viewport.image_h);
+    _ = f.tester.shortcut(.{ .key = 'l' });
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("20×10"));
+}
