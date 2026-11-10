@@ -6,6 +6,7 @@ const app = @import("app.zig");
 const paths = @import("paths.zig");
 const orientation = @import("orientation.zig");
 const viewport = @import("viewport.zig");
+const preload = @import("preload.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -31,25 +32,75 @@ pub fn view(s: *State, c: *ui.Context) void {
         return;
     }
     var key_buf: [16]u8 = undefined;
-    const key = s.picture_key(&key_buf);
-    const size: ui.Size = size: {
-        if (s.status == .shown) {
-            if (ui.imageSize(c, key, s.bytes)) |size| break :size size;
-            s.status = .failed;
-        }
+    if (s.status == .shown and s.viewport_generation != s.generation) {
+        new_picture(s, c, s.picture_key(&key_buf));
+    }
+    if (s.status != .shown) {
         ui.text(c, c.print("Cannot show {s}", .{s.basename()}), .{ .color = c.theme.muted });
         return;
-    };
-    assert(s.status == .shown and size.w > 0 and size.h > 0);
-    if (s.viewport_generation != s.generation) {
-        s.base = orientation.upright(size.w, size.h, orientation.read(s.bytes));
-        reset_viewport(s, c);
-        s.viewport_generation = s.generation;
     }
     s.viewport.set_view(c.size.w, c.size.h, c.scale);
+    preload_bounds(s, c);
     pointer(s, c);
-    draw(s, c, key);
+    if (s.source == .pixels and !s.promote_failed and needs_promote(s, c)) s.promote();
+    draw(s, c, s.picture_key(&key_buf));
     if (s.info_shown) info(s, c);
+}
+
+/// The upright size and turns of a newly loaded picture, and a fitted view.
+fn new_picture(s: *State, c: *ui.Context, key: []const u8) void {
+    assert(s.status == .shown);
+    switch (s.source) {
+        // The worker's pixels are already upright.
+        .pixels => |px| s.base = .{
+            .raw_w = @floatFromInt(px.native_w),
+            .raw_h = @floatFromInt(px.native_h),
+            .turns = 0,
+        },
+        .encoded => |bytes| {
+            const size = ui.imageSize(c, key, bytes) orelse {
+                s.status = .failed;
+                return;
+            };
+            s.base = orientation.upright(size.w, size.h, orientation.read(bytes));
+        },
+        .none => {
+            s.status = .failed;
+            return;
+        },
+    }
+    reset_viewport(s, c);
+    s.viewport_generation = s.generation;
+    assert(s.base.raw_w > 0 and s.base.raw_h > 0);
+}
+
+/// macOS decodes neighbors to the pixels a fitted picture may fill: the
+/// window when full screen, else the bound `resize_window` uses.
+fn preload_bounds(s: *State, c: *const ui.Context) void {
+    if (!preload.decoded) return;
+    assert(c.scale > 0);
+    var w: f64 = c.size.w;
+    var h: f64 = c.size.h;
+    if (s.window) |win| {
+        const m = win.monitorSize();
+        if (!win.isFullScreen() and m[0] > 0 and m[1] > 0) {
+            w = m[0] * window_screen_share;
+            h = m[1] * window_screen_share;
+        }
+    }
+    w = @max(1, @ceil(w * c.scale));
+    h = @max(1, @ceil(h * c.scale));
+    s.preload.set_bounds(@intFromFloat(w), @intFromFloat(h));
+}
+
+/// Zoomed past the preloaded pixels, or the window grew.
+fn needs_promote(s: *const State, c: *const ui.Context) bool {
+    const px = s.source.pixels;
+    const vp = &s.viewport;
+    const needed = @ceil(@max(vp.image_w, vp.image_h) * vp.scale * c.scale);
+    const have: f32 = @floatFromInt(@max(px.width, px.height));
+    assert(needed > 0 and have > 0);
+    return needed > have + 2;
 }
 
 fn drops(s: *State, c: *ui.Context, index: u32) void {
@@ -71,9 +122,14 @@ fn draw(s: *State, c: *ui.Context, key: []const u8) void {
     const angle = @as(f32, @floatFromInt(turns)) * std.math.pi / 2;
     const turn = ui.div(c).absolute().offset(v.box.x, v.box.y).rotate(angle);
     defer turn.end();
+    const source: ui.ImageSource = switch (s.source) {
+        .encoded => |bytes| .{ .encoded = bytes },
+        .pixels => |px| .{ .pixels = .{ .bgra = px.bgra, .width = px.width, .height = px.height } },
+        .none => unreachable, // status is shown
+    };
     _ = ui.image(c, .{
         .key = key,
-        .bytes = s.bytes,
+        .source = source,
         .box = .{ .w = v.box.w, .h = v.box.h },
         .part = v.part,
         .radius = 0,

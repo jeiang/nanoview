@@ -3,6 +3,7 @@ const ui = @import("nanoui").ui;
 const app = @import("app.zig");
 const view = @import("view.zig");
 const paths = @import("paths.zig");
+const preload = @import("preload.zig");
 const State = app.State;
 const testing = std.testing;
 
@@ -17,10 +18,13 @@ test {
     _ = @import("explorer_sort.zig");
 }
 
-/// A State and a Tester over it, on the heap: State is too large for the stack.
+/// A State and a Tester over it, on the heap: State is too large for the
+/// stack. The large buffers stay untouched until used.
 const Fixture = struct {
     state: *State,
     file_buffer: []u8,
+    pool: []u8,
+    scratch: []u8,
     tester: ui.Tester = undefined,
     tmp: std.testing.TmpDir,
     dir_buf: [paths.path_max]u8 = undefined,
@@ -31,9 +35,14 @@ const Fixture = struct {
         errdefer testing.allocator.destroy(f);
         const state = try testing.allocator.create(State);
         errdefer testing.allocator.destroy(state);
-        const file_buffer = try testing.allocator.alloc(u8, app.file_size_max);
-        f.* = .{ .state = state, .file_buffer = file_buffer, .tmp = testing.tmpDir(.{}) };
-        state.init(testing.io, testing.allocator, file_buffer);
+        f.* = .{
+            .state = state,
+            .file_buffer = try app.alloc_pages(app.file_size_max),
+            .pool = try app.alloc_pages(preload.pool_bytes),
+            .scratch = try app.alloc_pages(if (preload.decoded) app.file_size_max else 0),
+            .tmp = testing.tmpDir(.{}),
+        };
+        state.init(testing.io, testing.allocator, f.file_buffer, f.pool, f.scratch);
         f.dir_len = try f.tmp.dir.realPathFile(testing.io, ".", &f.dir_buf);
         try f.tester.init(testing.allocator, .init(state, view.view), .{
             .width = 480,
@@ -45,7 +54,9 @@ const Fixture = struct {
     fn destroy(f: *Fixture) void {
         f.tester.deinit();
         f.tmp.cleanup();
-        testing.allocator.free(f.file_buffer);
+        app.free_pages(f.file_buffer);
+        app.free_pages(f.pool);
+        app.free_pages(f.scratch);
         testing.allocator.destroy(f.state);
         testing.allocator.destroy(f);
     }
@@ -126,4 +137,71 @@ test "r turns the view a quarter and i shows the upright size" {
     _ = f.tester.shortcut(.{ .key = 'l' });
     _ = f.tester.shortcut(.{ .key = 'i' });
     try testing.expect(f.tester.containsText("20×10"));
+}
+
+fn drain(p: *preload.Preload) u32 {
+    var jobs: u32 = 0;
+    while (jobs < preload.slot_count * 2 and p.run_one()) jobs += 1;
+    return jobs;
+}
+
+test "the worker preloads the neighbors and the next step uses them" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a1.png", "a2.png", "a3.png", "a4.png", "a5.png" }) |n| {
+        try f.write_png(n, 40, 30);
+    }
+    try f.open("a1.png");
+    f.state.preload.set_bounds(960, 720);
+    _ = drain(&f.state.preload);
+    var ready: [5]bool = @splat(false);
+    var ready_count: u32 = 0;
+    for (f.state.preload.slots) |slot| {
+        if (slot.state != .ready) continue;
+        ready[slot.index] = true;
+        ready_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 4), ready_count);
+    try testing.expect(!ready[0] and ready[1] and ready[2] and ready[3] and ready[4]);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expect(f.state.preload.pinned != null);
+    if (preload.decoded) {
+        try testing.expect(f.state.source == .pixels);
+    } else {
+        const bytes = f.state.source.encoded;
+        const pool = f.state.preload.pool;
+        try testing.expect(@intFromPtr(bytes.ptr) >= @intFromPtr(pool.ptr));
+        try testing.expect(@intFromPtr(bytes.ptr) < @intFromPtr(pool.ptr) + pool.len);
+    }
+}
+
+test "zooming past the preloaded pixels reads the file" {
+    if (!preload.decoded) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 64, 64);
+    try f.write_png("b.png", 2000, 10);
+    try f.open("a.png");
+    f.state.preload.set_bounds(960, 720);
+    _ = drain(&f.state.preload);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expect(f.state.source == .pixels);
+    f.tester.pinch(240, 180, 8, 0, 0);
+    try testing.expect(f.state.source == .encoded);
+    try testing.expect(!f.state.viewport.fit);
+}
+
+test "opening another folder empties the slots" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a1.png", "a2.png", "a3.png" }) |n| try f.write_png(n, 8, 8);
+    try f.tmp.dir.createDirPath(testing.io, "other");
+    try f.write_png("other/b.png", 8, 8);
+    try f.open("a1.png");
+    f.state.preload.set_bounds(960, 720);
+    _ = drain(&f.state.preload);
+    try f.open("other/b.png");
+    for (f.state.preload.slots) |slot| {
+        try testing.expect(slot.state == .empty or slot.state == .loading);
+    }
 }
