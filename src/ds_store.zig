@@ -40,8 +40,10 @@ const Store = struct {
     address_count: u32,
 
     fn read_u32(st: *const Store, at: u64) ?u32 {
+        assert(st.bytes.len >= 36);
         if (at > st.bytes.len or st.bytes.len - at < 4) return null;
         const i: usize = @intCast(at);
+        assert(i + 4 <= st.bytes.len);
         return std.mem.readInt(u32, st.bytes[i..][0..4], .big);
     }
 
@@ -52,6 +54,7 @@ const Store = struct {
         const start = @as(u64, a & ~@as(u32, 0x1f)) + 4;
         const size = @as(u64, 1) << @intCast(a & 0x1f);
         if (start > st.bytes.len or st.bytes.len - start < size) return null;
+        assert(start >= 4 and start + size <= st.bytes.len);
         return .{ .start = start, .size = size };
     }
 };
@@ -70,7 +73,9 @@ fn open_store(bytes: []const u8) ?Store {
 
 /// The block number of the B-tree's master block, named `DSDB`.
 fn master_block(st: *const Store) ?u32 {
+    assert(st.address_count <= records_max);
     const padded = (@as(u64, st.address_count) + 255) / 256 * 256;
+    assert(padded % 256 == 0 and padded >= st.address_count);
     var at: u64 = 4 + @as(u64, st.addresses) + padded * 4;
     const entries = st.read_u32(at) orelse return null;
     at += 4;
@@ -96,6 +101,7 @@ const Record = struct {
 };
 
 fn read_record(st: *const Store, at: u64) ?Record {
+    assert(st.bytes.len >= 36);
     const units = st.read_u32(at) orelse return null;
     if (units > 1024) return null;
     const name_end = at + 4 + @as(u64, units) * 2;
@@ -122,7 +128,8 @@ fn read_record(st: *const Store, at: u64) ?Record {
     } else return null;
     const end = data_at + skip + data_len;
     if (end > b.len) return null;
-    assert(end > at);
+    assert(end > at and end <= b.len);
+    assert(n - @as(usize, @intCast(at + 4)) == @as(usize, units) * 2);
     return .{
         .name = b[@intCast(at + 4)..n],
         .code = code,
@@ -133,6 +140,7 @@ fn read_record(st: *const Store, at: u64) ?Record {
 }
 
 fn eq4(a: [4]u8, comptime b: *const [4]u8) bool {
+    comptime assert(b.len == 4);
     return std.mem.eql(u8, &a, b);
 }
 
@@ -144,6 +152,7 @@ const Views = struct {
     icvp: []const u8 = "",
 
     fn take(v: *Views, r: Record) void {
+        assert(r.end > 0 and r.name.len % 2 == 0);
         if (eq4(r.code, "vstl") and eq4(r.kind, "type")) v.vstl = r.data;
         if (eq4(r.code, "lsvC") and eq4(r.kind, "blob")) v.lsvc = r.data;
         if (eq4(r.code, "lsvp") and eq4(r.kind, "blob")) v.lsvp = r.data;
@@ -152,6 +161,7 @@ const Views = struct {
 };
 
 pub fn order_for(bytes: []const u8, name: []const u8) ?sort_order.Order {
+    assert(name.len > 0);
     var name16: [name_units_max * 2]u8 = undefined;
     const want = utf16be(name, &name16) orelse return null;
     const st = open_store(bytes) orelse return null;
@@ -159,6 +169,7 @@ pub fn order_for(bytes: []const u8, name: []const u8) ?sort_order.Order {
     const root = st.read_u32(master.start) orelse return null;
     var views: Views = .{};
     if (!walk(&st, root, want, &views)) return null;
+    assert(want.len % 2 == 0);
     if (std.mem.eql(u8, views.vstl, "icnv") and views.icvp.len > 0) return from_arrange(views.icvp);
     if (views.lsvc.len > 0) return from_list(views.lsvc);
     if (views.lsvp.len > 0) return from_list(views.lsvp);
@@ -167,6 +178,7 @@ pub fn order_for(bytes: []const u8, name: []const u8) ?sort_order.Order {
 }
 
 fn utf16be(name: []const u8, out: *[name_units_max * 2]u8) ?[]const u8 {
+    assert(name.len > 0);
     var units: [name_units_max]u16 = undefined;
     if (name.len > name_units_max * 3) return null;
     const n = std.unicode.utf8ToUtf16Le(&units, name) catch return null;
@@ -181,6 +193,7 @@ const Frame = struct { block: u32, position: u32, cursor: u64 };
 /// Visits every record with an explicit stack, keeping those named `want`.
 /// False when the tree is malformed.
 fn walk(st: *const Store, root: u32, want: []const u8, views: *Views) bool {
+    assert(want.len > 0 and want.len % 2 == 0);
     var stack: [depth_max]Frame = undefined;
     var depth: u32 = 1;
     stack[0] = .{ .block = root, .position = 0, .cursor = 0 };
@@ -209,6 +222,7 @@ fn walk(st: *const Store, root: u32, want: []const u8, views: *Views) bool {
         }
         const r = read_record(st, top.cursor) orelse return false;
         if (r.end > blk.start + blk.size) return false;
+        assert(r.end > top.cursor);
         if (std.mem.eql(u8, r.name, want)) views.take(r);
         records += 1;
         top.cursor = r.end;
@@ -224,6 +238,7 @@ fn walk(st: *const Store, root: u32, want: []const u8, views: *Views) bool {
 }
 
 fn key_of(id: []const u8) sort_order.Key {
+    assert(id.len <= std.math.maxInt(u32));
     const table = .{
         .{ "name", .name },                .{ "kind", .kind },
         .{ "size", .size },                .{ "dateModified", .date_modified },
@@ -237,10 +252,13 @@ fn key_of(id: []const u8) sort_order.Key {
 
 /// Finder's own directions when a setting gives none.
 fn default_order(key: sort_order.Key) sort_order.Order {
-    return .{ .key = key, .ascending = key == .name or key == .kind };
+    const result: sort_order.Order = .{ .key = key, .ascending = key == .name or key == .kind };
+    assert(result.key == key);
+    return result;
 }
 
 fn from_arrange(blob: []const u8) sort_order.Order {
+    assert(blob.len > 0);
     const p = bplist.parse(blob) orelse return .{};
     const by = bplist.dict_get(&p, p.top, "arrangeBy") orelse return .{};
     const result = default_order(key_of(bplist.as_string(&p, by) orelse return .{}));
@@ -249,6 +267,7 @@ fn from_arrange(blob: []const u8) sort_order.Order {
 }
 
 fn from_list(blob: []const u8) sort_order.Order {
+    assert(blob.len > 0);
     const p = bplist.parse(blob) orelse return .{};
     const column_obj = bplist.dict_get(&p, p.top, "sortColumn") orelse return .{};
     const column = bplist.as_string(&p, column_obj) orelse return .{};
@@ -257,6 +276,7 @@ fn from_list(blob: []const u8) sort_order.Order {
     const settings = column_settings(&p, columns, column) orelse return order;
     const ascending_obj = bplist.dict_get(&p, settings, "ascending") orelse return order;
     const ascending = bplist.as_bool(&p, ascending_obj) orelse return order;
+    assert(order.key == key_of(column));
     return .{ .key = order.key, .ascending = ascending };
 }
 

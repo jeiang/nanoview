@@ -26,7 +26,8 @@ pub fn build(b: *std.Build) void {
         const bundle_exe = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{
             .custom = "nanoview.app/Contents/MacOS",
         } } });
-        const plist = b.addInstallFile(b.path("macos/Info.plist"), "nanoview.app/Contents/Info.plist");
+        const plist_dest = "nanoview.app/Contents/Info.plist";
+        const plist = b.addInstallFile(b.path("macos/Info.plist"), plist_dest);
         const app = b.step("app", "Build zig-out/nanoview.app");
         app.dependOn(&bundle_exe.step);
         app.dependOn(&plist.step);

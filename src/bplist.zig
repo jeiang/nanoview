@@ -41,25 +41,37 @@ pub fn parse(bytes: []const u8) ?Plist {
     return p;
 }
 
+/// What `parse` established; every reader asserts it.
+fn check(p: *const Plist) void {
+    assert(p.offset_size >= 1 and p.offset_size <= 8);
+    assert(p.ref_size >= 1 and p.ref_size <= 8);
+    assert(p.count > 0 and p.top < p.count);
+    assert(p.table + p.count * p.offset_size <= p.bytes.len - trailer_size);
+}
+
 /// A big-endian unsigned integer of `size` bytes at `at`, inside the objects.
 fn read_uint(p: *const Plist, at: u64, size: u8) ?u64 {
     assert(size >= 1 and size <= 8);
+    assert(p.bytes.len >= 40);
     const end = std.math.add(u64, at, size) catch return null;
     if (end > p.bytes.len - trailer_size) return null;
     var value: u64 = 0;
     for (p.bytes[@intCast(at)..@intCast(end)]) |b| value = (value << 8) | b;
+    assert(size == 8 or value < @as(u64, 1) << @intCast(size * 8));
     return value;
 }
 
 const Header = struct { kind: u4, low: u4, count: u64, data: u64 };
 
 fn header(p: *const Plist, obj: u64) ?Header {
+    check(p);
     if (obj >= p.count) return null;
     const at = read_uint(p, p.table + obj * p.offset_size, p.offset_size) orelse return null;
     const marker: u8 = @intCast(read_uint(p, at, 1) orelse return null);
     const kind: u4 = @intCast(marker >> 4);
     const low: u4 = @intCast(marker & 0xF);
     if (low != 0xF or kind == kind_simple or kind == kind_int) {
+        assert(low < 0xF or kind == kind_simple or kind == kind_int);
         return .{ .kind = kind, .low = low, .count = low, .data = at + 1 };
     }
     // The count does not fit the low nibble: an integer object follows.
@@ -73,6 +85,7 @@ fn header(p: *const Plist, obj: u64) ?Header {
 
 /// ASCII strings only.
 pub fn as_string(p: *const Plist, obj: u64) ?[]const u8 {
+    check(p);
     const h = header(p, obj) orelse return null;
     if (h.kind != kind_ascii) return null;
     const end = std.math.add(u64, h.data, h.count) catch return null;
@@ -83,8 +96,10 @@ pub fn as_string(p: *const Plist, obj: u64) ?[]const u8 {
 }
 
 pub fn as_bool(p: *const Plist, obj: u64) ?bool {
+    check(p);
     const h = header(p, obj) orelse return null;
     if (h.kind != kind_simple) return null;
+    assert(h.count == h.low);
     return switch (h.low) {
         0x8 => false,
         0x9 => true,
@@ -93,6 +108,8 @@ pub fn as_bool(p: *const Plist, obj: u64) ?bool {
 }
 
 fn ref_at(p: *const Plist, h: Header, i: u64) ?u64 {
+    check(p);
+    assert(h.kind == kind_array or h.kind == kind_dict);
     const offset = std.math.mul(u64, i, p.ref_size) catch return null;
     const at = std.math.add(u64, h.data, offset) catch return null;
     return read_uint(p, at, p.ref_size);
@@ -100,8 +117,10 @@ fn ref_at(p: *const Plist, h: Header, i: u64) ?u64 {
 
 /// The value for an ASCII `key` (linear over at most 4096 keys).
 pub fn dict_get(p: *const Plist, obj: u64, key: []const u8) ?u64 {
+    check(p);
     const h = header(p, obj) orelse return null;
     if (h.kind != kind_dict or h.count > dict_keys_max) return null;
+    assert(h.count <= dict_keys_max);
     var i: u64 = 0;
     while (i < h.count) : (i += 1) {
         const key_obj = ref_at(p, h, i) orelse return null;
@@ -112,18 +131,23 @@ pub fn dict_get(p: *const Plist, obj: u64, key: []const u8) ?u64 {
 }
 
 pub fn array_len(p: *const Plist, obj: u64) ?u32 {
+    check(p);
     const h = header(p, obj) orelse return null;
     if (h.kind != kind_array or h.count > std.math.maxInt(u32)) return null;
+    assert(h.kind == kind_array);
     return @intCast(h.count);
 }
 
 pub fn array_at(p: *const Plist, obj: u64, i: u32) ?u64 {
+    check(p);
     const h = header(p, obj) orelse return null;
     if (h.kind != kind_array or i >= h.count) return null;
+    assert(i < h.count);
     return ref_at(p, h, i);
 }
 
 pub fn is_dict(p: *const Plist, obj: u64) bool {
+    check(p);
     const h = header(p, obj) orelse return false;
     return h.kind == kind_dict;
 }

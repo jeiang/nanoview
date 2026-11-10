@@ -76,6 +76,7 @@ pub const Preload = struct {
 
     pub fn stop(p: *Preload) void {
         const thread = p.thread orelse return;
+        assert(!p.quit.load(.acquire));
         p.quit.store(true, .release);
         p.notify();
         thread.join();
@@ -83,10 +84,12 @@ pub const Preload = struct {
     }
 
     pub fn lock(p: *Preload) void {
+        assert(p.pool.len == pool_bytes);
         p.mutex.lockUncancelable(p.io);
     }
 
     pub fn unlock(p: *Preload) void {
+        assert(p.pool.len == pool_bytes);
         p.mutex.unlock(p.io);
         p.notify();
     }
@@ -205,6 +208,7 @@ pub const Preload = struct {
     }
 
     fn held(p: *const Preload, index: u32) bool {
+        assert(index < p.folder.count);
         for (p.slots) |slot| {
             if (slot.state != .empty and slot.epoch == p.epoch and slot.index == index) return true;
         }
@@ -234,6 +238,7 @@ pub const Preload = struct {
 
     /// +1, -1, +2, -2, ..., +5, -5, +6, ..., +15.
     fn next_index(p: *const Preload, current: u32, count: u32) ?u32 {
+        assert(count >= 2 and current < count);
         var d: u32 = 1;
         while (d <= ahead_count) : (d += 1) {
             const ahead = (current + d) % count;

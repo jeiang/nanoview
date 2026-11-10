@@ -10,12 +10,15 @@ const tag_orientation: u16 = 0x0112;
 
 /// Mirrored variants are shown unmirrored.
 pub fn quarter_turns(exif: u8) u2 {
-    return switch (exif) {
+    const result: u2 = switch (exif) {
         3, 4 => 2,
         5, 6 => 1,
         7, 8 => 3,
         else => 0,
     };
+    // Orientations 5 to 8 swap width and height: an odd number of turns.
+    assert((exif >= 5 and exif <= 8) == (result % 2 == 1));
+    return result;
 }
 
 /// The EXIF orientation of a JPEG, 1 unless found.
@@ -30,10 +33,12 @@ pub fn jpeg_exif(bytes: []const u8) u8 {
         const len = std.mem.readInt(u16, bytes[at + 2 ..][0..2], .big);
         if (len < 2 or at + 2 + len > bytes.len) return 1;
         const payload = bytes[at + 4 .. at + 2 + len];
+        assert(payload.len == len - 2);
         if (marker == 0xE1 and std.mem.startsWith(u8, payload, "Exif\x00\x00")) {
             return tiff_orientation(payload[6..]);
         }
         at += 2 + len;
+        assert(at <= bytes.len);
     }
     return 1;
 }
@@ -49,6 +54,7 @@ fn tiff_orientation(tiff: []const u8) u8 {
     if (std.mem.readInt(u16, tiff[2..4], endian) != 42) return 1;
     const ifd = std.mem.readInt(u32, tiff[4..8], endian);
     if (ifd > tiff.len or tiff.len - ifd < 2) return 1;
+    assert(ifd + 2 <= tiff.len);
     const count = @min(std.mem.readInt(u16, tiff[ifd..][0..2], endian), ifd_entries_max);
     var i: u32 = 0;
     while (i < count) : (i += 1) {
@@ -58,6 +64,7 @@ fn tiff_orientation(tiff: []const u8) u8 {
         const kind = std.mem.readInt(u16, tiff[entry + 2 ..][0..2], endian);
         if (tag != tag_orientation or kind != 3) continue;
         const value = std.mem.readInt(u16, tiff[entry + 8 ..][0..2], endian);
+        assert(entry + 12 <= tiff.len);
         if (value >= 1 and value <= 8) return @intCast(value);
         return 1;
     }
@@ -110,6 +117,7 @@ fn image_io_orientation(bytes: []const u8) u8 {
     // 3 is kCFNumberSInt32Type.
     if (!image_io.CFNumberGetValue(n, 3, &value)) return 1;
     if (value < 1 or value > 8) return 1;
+    assert(value >= 1 and value <= 8);
     return @intCast(value);
 }
 

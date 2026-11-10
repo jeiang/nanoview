@@ -31,6 +31,7 @@ pub fn key_of_property(fmtid: Guid, pid: u32) sort_order.Key {
     }
     // PKEY_ItemDate: Explorer's "Date" column.
     if (std.meta.eql(fmtid, fmtid_item_date) and pid == 100) return .date_modified;
+    comptime assert(!std.meta.eql(fmtid_storage, fmtid_item_date));
     return .name;
 }
 
@@ -136,6 +137,7 @@ pub fn detect(dir_path: []const u8) sort_order.Order {
 
 /// The order of one Explorer window, when it shows `want`.
 fn window_order(dispatch: *Com, want: []const u16) ?sort_order.Order {
+    assert(want.len > 0);
     const provider = dispatch.query(&iid_service_provider) orelse return null;
     defer provider.release();
     var browser_raw: ?*Com = null;
@@ -200,12 +202,14 @@ fn wide_dir(dir_path: []const u8, out: *[wide_max]u16) ?[]const u16 {
 
 fn trim_separator(s: []const u16) []const u16 {
     // `C:\` keeps its separator: Explorer reports a drive root that way.
-    if (s.len > 3 and s[s.len - 1] == '\\') return s[0 .. s.len - 1];
-    return s;
+    const result = if (s.len > 3 and s[s.len - 1] == '\\') s[0 .. s.len - 1] else s;
+    assert(result.len + 1 >= s.len);
+    return result;
 }
 
 fn eql_ignore_case(a: []const u16, b: []const u16) bool {
     if (a.len != b.len) return false;
+    assert(a.len == b.len);
     for (a, b) |x, y| {
         if (lower(x) != lower(y)) return false;
     }
@@ -213,7 +217,9 @@ fn eql_ignore_case(a: []const u16, b: []const u16) bool {
 }
 
 fn lower(u: u16) u16 {
-    return if (u >= 'A' and u <= 'Z') u + 32 else u;
+    const result = if (u >= 'A' and u <= 'Z') u + 32 else u;
+    assert(result < 'A' or result > 'Z');
+    return result;
 }
 
 test "key_of_property maps Explorer's columns" {

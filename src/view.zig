@@ -204,6 +204,7 @@ fn info(s: *State, c: *ui.Context) void {
 }
 
 fn pointer(s: *State, c: *ui.Context) void {
+    assert(s.status == .shown);
     const in = &c.input;
     const vp = &s.viewport;
     if (in.zoom != 1 and in.zoom > 0) {
@@ -234,6 +235,7 @@ fn pointer(s: *State, c: *ui.Context) void {
 
 /// On macOS the top band of a window with a hidden title bar moves the window.
 fn in_title_band(s: *const State, c: *const ui.Context) bool {
+    assert(c.title_bar_height >= 0);
     if (!mac) return false;
     const full = if (s.window) |w| w.isFullScreen() else false;
     return !full and c.input.mouse.y < c.title_bar_height;
@@ -241,6 +243,7 @@ fn in_title_band(s: *const State, c: *const ui.Context) bool {
 
 /// A key as a shortcut; off macOS bare keys arrive as keys or characters.
 fn key_hit(c: *ui.Context, comptime sc: ui.Shortcut) bool {
+    comptime assert(sc.key != 0);
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
     // `?Key`: nanoui does not export its key enum from `ui`.
@@ -264,10 +267,12 @@ fn key_hit(c: *ui.Context, comptime sc: ui.Shortcut) bool {
 }
 
 fn keys(s: *State, c: *ui.Context) void {
+    assert(s.path_len <= paths.path_max);
     const vp = &s.viewport;
     const shown = s.status == .shown;
     const cx = c.size.w / 2;
     const cy = c.size.h / 2;
+    assert(cx >= 0 and cy >= 0);
     if (key_hit(c, .{ .key = 'o', .cmd = true })) s.open_dialog();
     if (key_hit(c, .{ .key = ui.Shortcut.right })) s.step(1);
     if (key_hit(c, .{ .key = ui.Shortcut.left })) s.step(-1);
