@@ -60,7 +60,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/viewport.zig` | Zoom, pan, fit and the visible part of a rotated picture |
 | `src/folder.zig` | Folder listing, natural and Finder-style sorting |
 | `src/preload.zig` | Worker that preloads neighbors into a fixed pool |
-| `src/decode.zig` | `decode_fit`: one entry to the system decoder; size and limit checks |
+| `src/decode.zig` | `decode_fit`: the system decoder, then the bundled ones; size and limit checks |
 | `src/decode_macos.zig`, `decode_linux.zig`, `decode_windows.zig` | ImageIO, gdk-pixbuf (dlopen), WIC (COM by hand) |
 | `src/wuffs.zig`, `src/wuffs_bridge.c` | Wuffs: BMP, GIF, APNG, QOI, TGA into caller memory, no allocation |
 | `src/webp.zig`, `src/webp_bridge.c` | libwebp: still and animated WebP |
