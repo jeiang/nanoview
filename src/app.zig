@@ -10,6 +10,7 @@ const sort_order = @import("sort_order.zig");
 const preload_mod = @import("preload.zig");
 const settings_mod = @import("settings.zig");
 const metadata_mod = @import("metadata.zig");
+const shell = @import("shell.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -379,7 +380,7 @@ pub const State = struct {
         s.slideshow_at = null;
         s.trash_pending = false;
         assert(s.path_len > 0);
-        if (!nanoui.shell.trash(s.path())) {
+        if (!shell.trash(s.io, s.path())) {
             s.notify("Could not move {s} to the Trash", .{s.basename()});
             return;
         }
@@ -445,7 +446,7 @@ pub const State = struct {
     pub fn reveal(s: *const State) void {
         if (s.status == .empty) return;
         assert(s.path_len > 0);
-        nanoui.shell.showInFolder(s.path());
+        shell.reveal(s.path());
     }
 
     pub fn copy_path(s: *const State) void {

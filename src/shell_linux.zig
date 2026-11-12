@@ -1,0 +1,246 @@
+const std = @import("std");
+const linux = std.os.linux;
+const shell = @import("shell.zig");
+const paths = @import("paths.zig");
+const assert = std.debug.assert;
+const walk_max: u32 = paths.path_max;
+const at_cwd: i32 = linux.AT.FDCWD;
+const Tm = extern struct {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    day: i32,
+    month: i32,
+    year: i32,
+    weekday: i32,
+    yearday: i32,
+    dst: i32,
+    offset: i64,
+    zone: ?[*:0]const u8,
+};
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+extern "c" fn time(out: ?*i64) i64;
+extern "c" fn localtime_r(value: *const i64, out: *Tm) ?*Tm;
+
+fn env(name: [*:0]const u8) ?[]const u8 {
+    const value = getenv(name) orelse return null;
+    for (0..paths.path_max) |i| {
+        if (value[i] == 0) return value[0..i];
+    }
+    return null;
+}
+
+fn z(path: []const u8, out: *[paths.path_max + 1]u8) ?[:0]const u8 {
+    if (path.len > paths.path_max or std.mem.indexOfScalar(u8, path, 0) != null) return null;
+    @memcpy(out[0..path.len], path);
+    out[path.len] = 0;
+    return out[0..path.len :0];
+}
+
+fn stat(fd: i32, path: [*:0]const u8, flags: u32) ?linux.Statx {
+    var result: linux.Statx = undefined;
+    var mask: linux.STATX = .BASIC_STATS;
+    mask.MNT_ID = true;
+    if (linux.statx(fd, path, flags, mask, &result) != 0) return null;
+    if (!result.mask.TYPE or !result.mask.MODE or !result.mask.UID) return null;
+    return result;
+}
+
+fn same_device(a: linux.Statx, b: linux.Statx) bool {
+    return a.dev_major == b.dev_major and a.dev_minor == b.dev_minor;
+}
+
+fn private_dir(parent: i32, name: [*:0]const u8, uid: u32) ?i32 {
+    _ = linux.mkdirat(parent, name, 0o700);
+    const raw = linux.openat(parent, name, .{
+        .DIRECTORY = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0);
+    if (linux.errno(raw) != .SUCCESS) return null;
+    const fd: i32 = @intCast(raw);
+    const s = stat(fd, "", linux.AT.EMPTY_PATH) orelse {
+        _ = linux.close(fd);
+        return null;
+    };
+    if (s.uid != uid or s.mode & 0o077 != 0) {
+        _ = linux.close(fd);
+        return null;
+    }
+    return fd;
+}
+
+fn mount_point(path: []const u8, source: linux.Statx, out: *[paths.path_max]u8) ?[]const u8 {
+    var current = std.fs.path.dirname(path) orelse return null;
+    for (0..walk_max) |_| {
+        var buf: [paths.path_max + 1]u8 = undefined;
+        const p = z(current, &buf) orelse return null;
+        const here = stat(at_cwd, p, 0) orelse return null;
+        if (!same_device(source, here)) return null;
+        const parent = std.fs.path.dirname(current) orelse current;
+        if (std.mem.eql(u8, parent, current)) break;
+        const above = stat(at_cwd, (z(parent, &buf) orelse return null), 0) orelse return null;
+        if (!same_device(here, above) or here.mnt_id != above.mnt_id) break;
+        current = parent;
+    } else return null;
+    @memcpy(out[0..current.len], current);
+    return out[0..current.len];
+}
+
+fn local_date() ?shell.Date {
+    const now = time(null);
+    var tm: Tm = undefined;
+    if (now == -1 or localtime_r(&now, &tm) == null or tm.year < -1900) return null;
+    return .{
+        .year = @intCast(tm.year + 1900),
+        .month = @intCast(tm.month + 1),
+        .day = @intCast(tm.day),
+        .hour = @intCast(tm.hour),
+        .minute = @intCast(tm.min),
+        .second = @intCast(tm.sec),
+    };
+}
+
+fn home_root(io: std.Io, root: []const u8, uid: u32) ?i32 {
+    const parent = std.fs.path.dirname(root) orelse return null;
+    std.Io.Dir.cwd().createDirPath(io, parent) catch return null;
+    var root_z: [paths.path_max + 1]u8 = undefined;
+    return private_dir(at_cwd, z(root, &root_z) orelse return null, uid);
+}
+
+pub fn trash(io: std.Io, path: []const u8) bool {
+    if (path.len == 0 or path[0] != '/') return false;
+    var path_z: [paths.path_max + 1]u8 = undefined;
+    const source_z = z(path, &path_z) orelse return false;
+    const source = stat(at_cwd, source_z, linux.AT.SYMLINK_NOFOLLOW) orelse return false;
+    const uid = linux.getuid();
+    var root_buf: [paths.path_max]u8 = undefined;
+    if (shell.home_trash(env("XDG_DATA_HOME"), env("HOME"), &root_buf)) |root| {
+        if (home_root(io, root, uid)) |fd| {
+            defer _ = linux.close(fd);
+            const dest = stat(fd, "", linux.AT.EMPTY_PATH) orelse return false;
+            if (same_device(source, dest)) return move(fd, source_z, path, uid);
+        }
+    }
+    var top_buf: [paths.path_max]u8 = undefined;
+    const top = mount_point(path, source, &top_buf) orelse return false;
+    const relative = path[top.len + @intFromBool(!std.mem.eql(u8, top, "/")) ..];
+    return mount_move(top, source_z, relative, uid);
+}
+
+fn mount_move(top: []const u8, source: [:0]const u8, relative: []const u8, uid: u32) bool {
+    var shared_buf: [paths.path_max + 1]u8 = undefined;
+    const shared = std.mem.printSentinel(&shared_buf, "{s}/.Trash", .{top}, 0) catch return false;
+    const raw = linux.openat(at_cwd, shared, .{
+        .DIRECTORY = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0);
+    if (linux.errno(raw) == .SUCCESS) {
+        const shared_fd: i32 = @intCast(raw);
+        defer _ = linux.close(shared_fd);
+        const s = stat(shared_fd, "", linux.AT.EMPTY_PATH) orelse return false;
+        if (s.mode & 0o1000 != 0) {
+            var uid_buf: [16]u8 = undefined;
+            const name = std.mem.printSentinel(&uid_buf, "{d}", .{uid}, 0) catch return false;
+            if (private_dir(shared_fd, name, uid)) |fd| {
+                defer _ = linux.close(fd);
+                if (move(fd, source, relative, uid)) return true;
+            }
+        }
+    }
+    var root_buf: [paths.path_max]u8 = undefined;
+    const root = shell.mount_trash(top, uid, false, &root_buf) orelse return false;
+    var root_z: [paths.path_max + 1]u8 = undefined;
+    const fd = private_dir(at_cwd, (z(root, &root_z) orelse return false), uid) orelse return false;
+    defer _ = linux.close(fd);
+    return move(fd, source, relative, uid);
+}
+
+fn move(root: i32, source: [:0]const u8, original: []const u8, uid: u32) bool {
+    assert(original.len > 0);
+    const files = private_dir(root, "files", uid) orelse return false;
+    defer _ = linux.close(files);
+    const info = private_dir(root, "info", uid) orelse return false;
+    defer _ = linux.close(info);
+    var text_buf: [shell.info_max]u8 = undefined;
+    const text = shell.trash_info(original, local_date() orelse return false, &text_buf) orelse
+        return false;
+    for (0..shell.attempts_max) |attempt| {
+        var name_buf: [paths.path_max]u8 = undefined;
+        const name = shell.unique_name(
+            std.fs.path.basename(source),
+            @intCast(attempt),
+            &name_buf,
+        ) orelse return false;
+        var name_z: [paths.path_max + 1]u8 = undefined;
+        const dest = z(name, &name_z) orelse return false;
+        // Reserve metadata first; neither existing files nor metadata are replaced.
+        var info_buf: [paths.path_max + 16]u8 = undefined;
+        const metadata = std.mem.printSentinel(
+            &info_buf,
+            "{s}.trashinfo",
+            .{name},
+            0,
+        ) catch return false;
+        const raw = linux.openat(info, metadata, .{
+            .ACCMODE = .WRONLY,
+            .CREAT = true,
+            .EXCL = true,
+            .CLOEXEC = true,
+        }, 0o600);
+        if (linux.errno(raw) == .EXIST) continue;
+        if (linux.errno(raw) != .SUCCESS) return false;
+        const fd: i32 = @intCast(raw);
+        const written = linux.write(fd, text.ptr, text.len);
+        const synced = if (written == text.len) linux.fsync(fd) else 1;
+        const closed = linux.close(fd);
+        const result = if (synced == 0 and closed == 0)
+            linux.renameat2(at_cwd, source, files, dest, .{ .NOREPLACE = true })
+        else
+            1;
+        if (result == 0) return true;
+        _ = linux.unlinkat(info, metadata, 0);
+        if (linux.errno(result) != .EXIST) return false;
+    }
+    return false;
+}
+
+pub fn reveal(path: []const u8) bool {
+    return @import("shell_dbus.zig").reveal(path);
+}
+
+test "trash move preserves collisions and writes recoverable metadata" {
+    const t = std.testing;
+    const io = t.io;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [paths.path_max]u8 = undefined;
+    const dir_len = try tmp.dir.realPathFile(io, ".", &dir_buf);
+    var root_buf: [paths.path_max]u8 = undefined;
+    const root = paths.join(dir_buf[0..dir_len], "Trash", &root_buf).?;
+    const fd = home_root(io, root, linux.getuid()).?;
+    defer _ = linux.close(fd);
+    try tmp.dir.writeFile(io, .{ .sub_path = "a b.png", .data = "picture" });
+    var source_buf: [paths.path_max]u8 = undefined;
+    const source = paths.join(dir_buf[0..dir_len], "a b.png", &source_buf).?;
+    var source_z: [paths.path_max + 1]u8 = undefined;
+    const p = z(source, &source_z).?;
+    try t.expect(move(fd, p, source, linux.getuid()));
+    try tmp.dir.writeFile(io, .{ .sub_path = "a b.png", .data = "second" });
+    try t.expect(move(fd, p, source, linux.getuid()));
+    var data: [shell.info_max]u8 = undefined;
+    const first = try tmp.dir.openFile(io, "Trash/files/a b.png", .{});
+    defer first.close(io);
+    const n = try first.readPositionalAll(io, &data, 0);
+    try t.expectEqualStrings("picture", data[0..n]);
+    const second = try tmp.dir.openFile(io, "Trash/files/a b.png.1", .{});
+    defer second.close(io);
+    const n2 = try second.readPositionalAll(io, &data, 0);
+    try t.expectEqualStrings("second", data[0..n2]);
+    const metadata = try tmp.dir.openFile(io, "Trash/info/a b.png.1.trashinfo", .{});
+    defer metadata.close(io);
+    const n3 = try metadata.readPositionalAll(io, &data, 0);
+    try t.expect(std.mem.indexOf(u8, data[0..n3], "/a%20b.png\nDeletionDate=") != null);
+    try t.expect(!move(fd, p, source, linux.getuid()));
+}

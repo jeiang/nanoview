@@ -16,6 +16,7 @@ test {
     _ = @import("ds_store.zig");
     _ = @import("sort_order.zig");
     _ = @import("explorer_sort.zig");
+    _ = @import("shell.zig");
     _ = @import("actions.zig");
     _ = @import("settings.zig");
 }
