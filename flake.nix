@@ -150,7 +150,13 @@
       devShells = forSystems (pkgs: {
         default = pkgs.mkShellNoCC (
           {
-            packages = [ (zigFor pkgs) ];
+            packages = [
+              (zigFor pkgs)
+              # Editor language servers. zls follows Zig's minor version.
+              pkgs.zls_0_17
+              pkgs.clang-tools # clangd, for the C bridges and vendored decoders
+              pkgs.nixd
+            ];
             # Zig reads NIX_CFLAGS_COMPILE as a sign to search Nix paths only,
             # and then finds no macOS SDK frameworks.
             shellHook = "unset NIX_CFLAGS_COMPILE NIX_LDFLAGS";

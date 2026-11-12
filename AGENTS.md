@@ -32,6 +32,8 @@ carries; add to it when you vendor more code.
 Run every command inside the flake devshell: `nix develop -c <command>`. The shell hook unsets
 `NIX_CFLAGS_COMPILE` and `NIX_LDFLAGS`; with them set, Zig searches only Nix paths and cannot
 find the macOS frameworks.
+The `.envrc` loads the same shell with nix-direnv. The shell also has the editor language
+servers: `zls` (at Zig's minor version), `clangd` and `nixd`.
 
 | Task | Command |
 |---|---|
