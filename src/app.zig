@@ -545,6 +545,58 @@ pub const State = struct {
         nanoui.clipboard.writeText(s.path());
     }
 
+    /// Puts the picture on the clipboard at full size, with its file where
+    /// the system takes both.
+    pub fn copy_image(s: *State) void {
+        if (s.status == .empty) return;
+        if (s.status == .failed) return s.notify("There is no picture to copy", .{});
+        const file: ?[]const u8 = if (s.is_file()) s.path() else null;
+        if (s.full_pixels()) |px| return s.copied(px.bgra, px.width, px.height, file);
+        if (builtin.os.tag == .macos) return s.copy_decoded(file);
+        // Preloaded pixels may be fitted to the window: decode the file whole.
+        if (s.source == .pixels and !s.promote_failed) s.promote();
+        if (s.full_pixels()) |px| return s.copied(px.bgra, px.width, px.height, file);
+        s.notify("Cannot copy {s}", .{s.basename()});
+    }
+
+    fn full_pixels(s: *const State) ?Source.Pixels {
+        assert(s.status == .shown);
+        const px = switch (s.source) {
+            .pixels => |px| px,
+            else => return null,
+        };
+        if (px.width != px.native_w or px.height != px.native_h) return null;
+        return px;
+    }
+
+    /// macOS keeps no full-size pixels: the system decodes the file whole
+    /// into memory it allocates, freed once the clipboard has its copy.
+    fn copy_decoded(s: *State, file: ?[]const u8) void {
+        assert(builtin.os.tag == .macos and s.status == .shown);
+        const encoded = switch (s.source) {
+            .encoded => |bytes| bytes,
+            // Preloaded pixels come from a slot, which leaves file_buffer free.
+            .pixels => paths.read_file(s.io, s.path(), s.file_buffer) catch
+                return s.notify("Cannot read {s}", .{s.basename()}),
+            .none => unreachable,
+        };
+        const decode_macos = @import("decode_macos.zig");
+        const full = decode_macos.decode_full(encoded) catch |err| return switch (err) {
+            error.TooLarge => s.notify("{s} is too large to copy", .{s.basename()}),
+            else => s.notify("Cannot copy {s}", .{s.basename()}),
+        };
+        defer full.release();
+        s.copied(full.bgra, full.width, full.height, file);
+    }
+
+    fn copied(s: *State, bgra: []const u8, width: u32, height: u32, file: ?[]const u8) void {
+        if (nanoui.clipboard.writeImage(bgra, width, height, file)) {
+            s.notify("Copied {s}", .{s.basename()});
+        } else {
+            s.notify("Could not copy {s} to the clipboard", .{s.basename()});
+        }
+    }
+
     /// Opens the name field with the name before the extension selected;
     /// the view draws it and calls `commit_rename` or `cancel_rename`.
     pub fn start_rename(s: *State) void {

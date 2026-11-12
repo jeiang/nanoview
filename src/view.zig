@@ -419,6 +419,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .restore => s.restore(),
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
+        .copy_image => s.copy_image(),
         .rename => s.start_rename(),
     }
 }

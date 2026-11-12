@@ -64,6 +64,8 @@ extern "c" fn CGBitmapContextCreate(
     info: u32,
 ) ?*anyopaque;
 extern "c" fn CGContextRelease(ctx: *anyopaque) void;
+extern "c" fn CGBitmapContextGetData(ctx: *anyopaque) ?[*]u8;
+extern "c" fn CGContextClearRect(ctx: *anyopaque, rect: CGRect) void;
 extern "c" fn CGContextSetInterpolationQuality(ctx: *anyopaque, quality: c_int) void;
 extern "c" fn CGContextDrawImage(ctx: *anyopaque, rect: CGRect, image: *anyopaque) void;
 
@@ -157,5 +159,52 @@ pub fn decode_fit(encoded: []const u8, out: []u8, bounds_w: u32, bounds_h: u32) 
         .height = @intCast(h),
         .native_w = native.w,
         .native_h = native.h,
+    };
+}
+
+/// A full-size decode in memory the system allocates: for handing the
+/// picture to another app (the clipboard) while the fixed buffers are in
+/// use for showing it. `release` frees it.
+pub const Full = struct {
+    context: *anyopaque,
+    bgra: []const u8,
+    width: u32,
+    height: u32,
+
+    pub fn release(f: Full) void {
+        CGContextRelease(f.context);
+    }
+};
+
+pub fn decode_full(encoded: []const u8) !Full {
+    if (encoded.len == 0) return error.NotImage;
+    const len: isize = @intCast(encoded.len);
+    const data = CFDataCreateWithBytesNoCopy(null, encoded.ptr, len, kCFAllocatorNull) orelse
+        return error.Data;
+    defer CFRelease(data);
+    const src = CGImageSourceCreateWithData(data, null) orelse return error.NotImage;
+    defer CFRelease(src);
+    const native = try native_size(src);
+    const img = try thumbnail(src, @intCast(@max(native.w, native.h)));
+    defer CGImageRelease(img);
+    const w = CGImageGetWidth(img);
+    const h = CGImageGetHeight(img);
+    if (w == 0 or h == 0) return error.NotImage;
+    if (w * h > pixels_max) return error.TooLarge;
+    const space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB) orelse return error.ColorSpace;
+    defer CGColorSpaceRelease(space);
+    const context = CGBitmapContextCreate(null, w, h, 8, w * 4, space, bgra_premultiplied) orelse
+        return error.BitmapContext;
+    errdefer CGContextRelease(context);
+    const pixels = CGBitmapContextGetData(context) orelse return error.BitmapContext;
+    const rect: CGRect = .{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) };
+    CGContextClearRect(context, rect);
+    CGContextDrawImage(context, rect, img);
+    assert(w <= std.math.maxInt(u32) and h <= std.math.maxInt(u32));
+    return .{
+        .context = context,
+        .bgra = pixels[0 .. w * h * 4],
+        .width = @intCast(w),
+        .height = @intCast(h),
     };
 }
