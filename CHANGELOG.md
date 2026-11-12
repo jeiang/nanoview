@@ -25,6 +25,7 @@ section that matches its tag.
 - Opened files and folders are remembered in a recent list.
 - Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z, not on Windows),
   copy the picture (Cmd/Ctrl+C) and paste files or a picture (Cmd/Ctrl+V).
+- `single_instance` setting: starting nanoview again hands its files to the running window.
 - BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
   and libwebp v1.6.0); the archives carry their license notices.
 - macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI, PBM, JPEG XL, MPO, PICT and some camera RAW
@@ -45,6 +46,7 @@ section that matches its tag.
 ### Fixed
 
 - A file that cannot be moved to the Trash now says so in the window.
+- After a rotation the window no longer shows the old frame, cut off, until the next click.
 
 ## [0.2.0] - 2026-11-10
 

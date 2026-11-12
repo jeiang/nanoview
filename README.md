@@ -118,6 +118,7 @@ and the window names the first such line.
 | `title_bar` | `default` | `default`, `hidden`: Windows only |
 | `always_on_top` | `false` | `true`, `false`: no effect on GTK 4 |
 | `recent` | `true` | `true`, `false`: remember the last 10 opened files and folders |
+| `single_instance` | `false` | `true`, `false`: a second start hands its files to the open window |
 
 `sort = system` follows Finder or Explorer. `date_created` exists on macOS only; elsewhere it
 sorts by the modified date and says so. `random` shuffles again on every folder read. The

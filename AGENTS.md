@@ -67,6 +67,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/wuffs_fixtures.zig` | Builds the Wuffs test pictures at compile time |
 | `src/settings.zig` | `Settings`, its defaults and the `settings.conf` parser |
 | `src/recent.zig` | The recent files list and its file |
+| `src/instance.zig`, `instance_posix.zig`, `instance_windows.zig` | Single instance: the message, a Unix socket, a mutex with `WM_COPYDATA` |
 | `src/metadata.zig` | File size, date and format for the info line |
 | `src/shell.zig` | Trash and reveal; macOS goes through nanoui |
 | `src/shell_linux.zig`, `shell_dbus.zig` | FreeDesktop trash; `FileManager1.ShowItems` through GIO (dlopen) |
