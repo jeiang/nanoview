@@ -489,3 +489,19 @@ test "zoom keys use the configured percentage and options notify" {
         try testing.expect(f.tester.containsText(message));
     }
 }
+
+test "off macOS a typed plus zooms in with Shift held" {
+    if (@import("builtin").os.tag == .macos) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 1000, 800);
+    try f.open("a.png");
+    const before = f.state.viewport.scale;
+    f.tester.setMods(.{ .shift = true });
+    f.tester.typeText("+");
+    try testing.expect(f.state.viewport.scale > before);
+    const zoomed = f.state.viewport.scale;
+    f.tester.setMods(.{});
+    f.tester.typeText("-");
+    try testing.expect(f.state.viewport.scale < zoomed);
+}

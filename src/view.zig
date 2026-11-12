@@ -308,7 +308,7 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     assert(sc.key != 0);
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
-    if (c.input.cmd or c.input.ctrl or c.input.alt or c.input.shift != sc.shift) return false;
+    if (c.input.cmd or c.input.ctrl or c.input.alt) return false;
     // `?Key`: nanoui does not export its key enum from `ui`.
     const Key = @FieldType(@FieldType(ui.Context, "input"), "key");
     const want: Key = switch (sc.key) {
@@ -323,12 +323,16 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
         else => null,
     };
     if (want) |k| {
-        if (c.input.key != k) return false;
+        if (c.input.key != k or c.input.shift != sc.shift) return false;
         c.input.key = null;
         return true;
     }
     const chars = c.input.chars;
     if (chars.len != 1 or std.ascii.toLower(chars[0]) != sc.key) return false;
+    // A shifted punctuation key arrives as its own character ("+"), so
+    // Shift only tells letters and Space apart.
+    const shift_tells = std.ascii.isAlphabetic(chars[0]) or chars[0] == ' ';
+    if (shift_tells and c.input.shift != sc.shift) return false;
     c.input.chars = "";
     return true;
 }
