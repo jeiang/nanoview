@@ -31,6 +31,10 @@ pub const Item = struct {
     click: ?Click,
     selector: ?[:0]const u8 = null,
     on_open: ?Click = null,
+    /// In a submenu whose accelerators are shown only: the menu bar lets
+    /// its key go on to the view (`accelerators_shown_only`).
+    shown_only: bool = false,
+    accel: Accelerator = .{},
     /// The submenu it holds, if it holds one.
     submenu: ?objc.Object = null,
     /// The item whose submenu it is in (null in the menu itself).
@@ -66,6 +70,7 @@ pub const Item = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const a = parseAccelerator(accel);
+        it.accel = a;
         var buf: [8]u8 = undefined;
         objc.msg(void, it.ns, "setKeyEquivalent:", .{objc.nsString(a.keyString(&buf))});
         objc.msg(void, it.ns, "setKeyEquivalentModifierMask:", .{a.mods});
@@ -126,6 +131,7 @@ pub const Menu = struct {
             .methods = &.{.{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" }},
         });
         self.* = .{ .gpa = gpa, .ns = objc.msg(objc.Object, menu_class, "new", .{}), .target = target, .app_name = app_name };
+        objc.setZig(self.ns, self);
         errdefer self.destroyItems();
         try self.build(self.ns, template, null);
         objc.msg(void, self.ns, "setAutoenablesItems:", .{objc.NO});
@@ -135,6 +141,7 @@ pub const Menu = struct {
     pub fn destroy(self: *Menu) void {
         objc.setZig(self.target, null);
         objc.release(self.target);
+        objc.setZig(self.ns, null);
         objc.release(self.ns);
         self.destroyItems();
         self.gpa.destroy(self);
@@ -149,6 +156,18 @@ pub const Menu = struct {
     pub fn item(self: *Menu, id: []const u8) ?*Item {
         for (self.items.items) |it| if (std.mem.eql(u8, it.id, id)) return it;
         return null;
+    }
+
+    /// Whether `event` is the key of an item whose accelerator is shown only.
+    fn showsOnly(self: *Menu, event: objc.Object) bool {
+        const chars = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
+        const view = std.unicode.Utf8View.init(chars) catch return false;
+        var it = view.iterator();
+        const key = lower(it.nextCodepoint() orelse return false);
+        const flags: usize = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
+        const mods = flags & (mod_shift | mod_ctrl | mod_alt | mod_cmd);
+        for (self.items.items) |x| if (x.shown_only and x.accel.key != 0 and lower(x.accel.key) == key and x.accel.mods == mods) return true;
+        return false;
     }
 
     /// Shows the menu as a context menu at `x`, `y` (points, top left) of
@@ -221,7 +240,8 @@ pub const Menu = struct {
             } else group = 0;
             const ns = makeItem(t, self.app_name);
             defer objc.release(ns);
-            const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .selector = t.selector, .group = group, .parent = parent });
+            const shown_only = if (parent) |p| p.shown_only else false;
+            const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .selector = t.selector, .shown_only = shown_only, .accel = parseAccelerator(t.accelerator), .group = group, .parent = parent });
             objc.msg(void, menu, "addItem:", .{ns});
             if ((t.role == null and t.selector == null) or t.click != null) {
                 objc.msg(void, ns, "setTarget:", .{self.target});
@@ -243,7 +263,7 @@ pub const Menu = struct {
         if (t.on_open != null) objc.msg(void, sub, "setDelegate:", .{self.target});
         objc.msg(void, holder, "setSubmenu:", .{sub});
         objc.msg(void, menu, "addItem:", .{holder});
-        const it = try self.track(.{ .menu = self, .ns = holder, .id = t.id, .kind = .normal, .checked = false, .click = null, .on_open = t.on_open, .submenu = sub, .parent = parent });
+        const it = try self.track(.{ .menu = self, .ns = holder, .id = t.id, .kind = .normal, .checked = false, .click = null, .on_open = t.on_open, .shown_only = t.accelerators_shown_only or (if (parent) |p| p.shown_only else false), .submenu = sub, .parent = parent });
         try self.build(sub, template, it);
         return it;
     }
@@ -346,7 +366,13 @@ pub const parseAccelerator = menu_types.parseAccelerator;
 
 fn performKeyEquivalent(self_obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
     if (@import("ui/keys.zig").menu_key_equivalents_suspended) return objc.NO;
+    // A key whose item only shows it goes on to the view.
+    if (objc.getZig(Menu, self_obj)) |m| if (m.showsOnly(event)) return objc.NO;
     return objc.msgSuper(objc.BOOL, self_obj, objc.class("NSMenu"), "performKeyEquivalent:", .{event});
+}
+
+fn lower(c: u21) u21 {
+    return if (c < 128) std.ascii.toLower(@intCast(c)) else c;
 }
 
 fn itemClicked(self_obj: objc.Object, _: objc.SEL, sender: objc.Object) callconv(.c) void {
