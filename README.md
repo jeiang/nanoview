@@ -49,6 +49,7 @@ Several pictures from one folder limit the list to those pictures until the next
 | `i` | Show name, size, zoom, position, format, file size and date |
 | `f`, Escape | Full screen, leave full screen |
 | Cmd+Backspace, Forward Delete | Move to Trash |
+| `t` | Keep the window above others |
 | Cmd/Ctrl+R | Reveal in file manager, with the file selected |
 | Cmd/Ctrl+Shift+C | Copy path |
 
@@ -92,6 +93,33 @@ and the window names the first such line.
 | `slideshow_reverse` | `false` | `true`, `false` |
 | `trash_confirm` | `false` | `true`, `false`: ask before Move to Trash |
 | `after_trash` | `next` | `next`, `previous` |
+| `background` | `theme` | `theme` or `#rrggbb`: the color behind the picture |
+| `window_fit` | `always` | `always`, `first`, `never`: when the window takes the picture's size |
+| `window_min_percent` | `0` | 0 to 100: smallest window, as a share of the screen |
+| `window_max_percent` | `80` | 10 to 100: largest window, as a share of the screen |
+| `sort` | `system` | `system`, `name`, `kind`, `size`, `date_modified`, `date_created`, `random` |
+| `sort_descending` | `false` | `true`, `false`: no effect with `system` or `random` |
+| `title` | `name` | `name`, `name_position`, `full`, `none`: the window title |
+| `title_bar` | `default` | `default`, `hidden`: Windows only |
+| `always_on_top` | `false` | `true`, `false`: no effect on GTK 4 |
+| `recent` | `true` | `true`, `false`: remember the last 10 opened files and folders |
+
+`sort = system` follows Finder or Explorer. `date_created` exists on macOS only; elsewhere it
+sorts by the modified date and says so. `random` shuffles again on every folder read. The
+window is never smaller than 320 by 240.
+
+A `key.<action> = <keys>` line replaces an action's keys, for example
+`key.next = n, PageDown`; an empty value removes them. Keys are separated by commas.
+Modifiers are `cmd` (Control off macOS), `ctrl`, `alt` and `shift`, joined with `+`. Named
+keys are `space`, `enter`, `escape`, `tab`, `backspace`, `delete`, `left`, `right`, `up`,
+`down`, `home`, `end`, `pageup`, `pagedown` and `F1` to `F12`; any other single character is
+itself. `#` and `,` cannot be bound. The action names are those in
+[`src/actions.zig`](src/actions.zig), such as `next`, `zoom_in` and `full_screen`. When a key
+is given to two actions, the later line wins and the window names it.
+
+The recent list is a text file, one path per line, newest first: `recent` beside
+`settings.conf` on macOS, `$XDG_STATE_HOME/nanoview/recent` (default `~/.local/state/`) on
+Linux and `%LOCALAPPDATA%\nanoview\recent` on Windows.
 
 ### Linux and Windows
 

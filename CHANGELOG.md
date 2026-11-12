@@ -19,6 +19,10 @@ section that matches its tag.
 - Opening a folder, and opening several pictures at once.
 - The info line also shows the format, file size and modified date.
 - `settings.conf`, read at startup: fit, zoom, loop, slideshow and trash options.
+- Settings for the background color, when and how far the window follows the picture, the
+  sort order, the title text, a hidden title bar (Windows) and always on top (`t`).
+- Keys can be rebound with `key.<action>` lines in `settings.conf`.
+- Opened files and folders are remembered in a recent list.
 - macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI and PBM pictures.
 - Linux: pictures decode through gdk-pixbuf when it is installed (WebP, AVIF, HEIC, TIFF, BMP,
   ICO and more); Move to Trash; reveal selects the file; touchpad pan and pinch; the window
