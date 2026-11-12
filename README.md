@@ -58,15 +58,23 @@ again before a step when it changed on disk. A command that fails says so in the
 
 ### Formats
 
-- macOS (ImageIO): PNG, JPEG, GIF, HEIC, WebP, AVIF, TIFF, BMP, ICO, JPEG 2000, PSD, ICNS, TGA,
-  OpenEXR, SGI and PBM.
-- Linux: PNG, JPEG and GIF always. With gdk-pixbuf 2 (`libgdk_pixbuf-2.0.so.0`) installed, also
-  what its loaders read from this set: WebP, AVIF, HEIC, TIFF, BMP, ICO, TGA, QOI, JPEG XL,
-  JPEG 2000, ICNS, PNM, PCX, XBM and XPM.
-- Windows (WIC): PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, DDS and JPEG XR. HEIC, AVIF and JPEG XL
-  need the matching codec from the Microsoft Store.
+PNG, JPEG, GIF, BMP, QOI, TGA and WebP open on every system: nanoview carries decoders for
+them ([Wuffs](https://github.com/google/wuffs) and
+[libwebp](https://chromium.googlesource.com/webm/libwebp)). The system's decoder is tried
+first and adds more:
 
-Animated pictures show their first frame. Linux needs GTK 3 or 4 and OpenGL.
+- macOS (ImageIO): HEIC, AVIF, TIFF, ICO, JPEG 2000, PSD, ICNS, OpenEXR, SGI, PBM, JPEG XL,
+  MPO (first picture), PICT, and camera RAW as DNG, Canon CR3, Panasonic RW2, Leica RWL and
+  Hasselblad 3FR. Other camera RAW formats are not listed: only their small embedded preview
+  would show.
+- Linux: with gdk-pixbuf 2 (`libgdk_pixbuf-2.0.so.0`) installed, what its loaders read from
+  this set: AVIF, HEIC, TIFF, ICO, JPEG XL, JPEG 2000, ICNS, PNM, PCX, XBM and XPM.
+- Windows (WIC): what the installed decoders list at startup from this set: TIFF, ICO, DDS,
+  JPEG XR, and HEIC, AVIF and JPEG XL with the matching codec from the Microsoft Store.
+
+Animated pictures show their first frame. Linux needs GTK 3 or 4 and OpenGL. The licenses of
+the bundled code are in `share/licenses/nanoview` (in `Resources/licenses` inside the macOS
+app, in `licenses` beside the Windows program).
 
 ### Settings
 

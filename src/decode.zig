@@ -1,6 +1,9 @@
-//! System decoders share fixed caller storage and upright premultiplied BGRA output.
+//! One entry to the decoders: the system's first, then the bundled ones. Both share
+//! fixed caller storage and give upright premultiplied BGRA.
 const std = @import("std");
 const builtin = @import("builtin");
+const webp = @import("webp.zig");
+const wuffs = @import("wuffs.zig");
 const assert = std.debug.assert;
 pub const pixels_max: u64 = 64 * 1000 * 1000;
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -31,20 +34,88 @@ pub fn decode_fit(bytes: []const u8, out: []u8, bw: u32, bh: u32) !Size {
     if (bytes.len == 0) return error.NotImage;
     if (bytes.len > file_size_max) return error.TooLarge;
     if (bw == 0 or bh == 0) return error.NotImage;
-    return switch (builtin.os.tag) {
+    const system: anyerror!Size = switch (builtin.os.tag) {
         .macos => @import("decode_macos.zig").decode_fit(bytes, out, bw, bh),
         .linux => @import("decode_linux.zig").decode_fit(bytes, out, bw, bh),
         .windows => @import("decode_windows.zig").decode_fit(bytes, out, bw, bh),
         else => error.Unavailable,
     };
+    // The system's error is the one to report: `Unavailable` selects nanoui's decoders.
+    return system catch |err| (decode_bundled(bytes, out, bw, bh) catch err);
 }
 
-/// Fixed, known raster names only; used for inventory intersection on every OS.
+/// True for data that only the bundled decoders read on this system, so the
+/// caller must not hand the encoded bytes to nanoui. ImageIO has no QOI.
+pub fn bundled_only(bytes: []const u8) bool {
+    return builtin.os.tag == .macos and std.mem.startsWith(u8, bytes, "qoif");
+}
+
+const Bundled = struct { width: u32, height: u32, webp: bool };
+
+/// PNG stays with the system and nanoui: Wuffs needs a work buffer of up to 8 bytes
+/// per pixel for it. Animated pictures give their first frame.
+fn probe_bundled(bytes: []const u8) ?Bundled {
+    if (webp.probe(bytes)) |info| {
+        return .{ .width = info.width, .height = info.height, .webp = true };
+    }
+    const info = wuffs.probe(bytes) orelse return null;
+    if (info.format == .png or info.work_size_still > wuffs_work_max) return null;
+    return .{ .width = info.width, .height = info.height, .webp = false };
+}
+
+const wuffs_work_max: u32 = wuffs.state_size_max + wuffs.state_align_max;
+
+/// Decodes at the native size into `out`, then shrinks in place to the bounds. A
+/// picture whose native pixels do not fit `out` fails: the preload slots are small,
+/// so a large one is decoded only when it is shown.
+fn decode_bundled(bytes: []const u8, out: []u8, bw: u32, bh: u32) !Size {
+    const found = probe_bundled(bytes) orelse return error.NotImage;
+    const size = try fit(found.width, found.height, bw, bh);
+    const native_len = @as(u64, found.width) * found.height * 4;
+    if (native_len > out.len) return error.TooLarge;
+    const native = out[0..@intCast(native_len)];
+    if (found.webp) {
+        _ = try webp.decode_first(bytes, native, &.{});
+    } else {
+        var work: [wuffs_work_max]u8 align(wuffs.state_align_max) = undefined;
+        _ = try wuffs.decode_first(bytes, native, &work);
+    }
+    shrink(native, found.width, found.height, size.width, size.height);
+    return size;
+}
+
+/// Averages blocks of the `w` by `h` picture at the start of `pixels` into a `dw` by
+/// `dh` picture at the same place. Each destination pixel lies at or before the
+/// first source pixel of its block, so no pixel is overwritten before it is read.
+fn shrink(pixels: []u8, w: u32, h: u32, dw: u32, dh: u32) void {
+    assert(dw > 0 and dh > 0 and dw <= w and dh <= h);
+    assert(pixels.len >= @as(u64, w) * h * 4);
+    if (dw == w and dh == h) return;
+    for (0..dh) |dy| {
+        const y0 = dy * h / dh;
+        const y1 = @max(y0 + 1, (dy + 1) * h / dh);
+        for (0..dw) |dx| {
+            const x0 = dx * w / dw;
+            const x1 = @max(x0 + 1, (dx + 1) * w / dw);
+            var sum: [4]u64 = @splat(0);
+            for (y0..y1) |y| {
+                for (pixels[(y * w + x0) * 4 .. (y * w + x1) * 4], 0..) |value, i| {
+                    sum[i % 4] += value;
+                }
+            }
+            const count = (y1 - y0) * (x1 - x0);
+            const to = pixels[(dy * dw + dx) * 4 ..][0..4];
+            for (to, sum) |*channel, total| channel.* = @intCast(total / count);
+        }
+    }
+}
+
+/// Fixed, known raster names only; used for inventory intersection on Linux and
+/// Windows. BMP, QOI, TGA and WebP are absent: the bundled decoders always read them.
 pub const known_extensions = [_][]const u8{
-    "avif", "heic", "heif", "webp", "tif", "tiff", "bmp", "dib", "ico", "cur",
-    "ani",  "pnm",  "pbm",  "pgm",  "ppm", "pam",  "pcx", "ras", "tga", "targa",
-    "xbm",  "xpm",  "icns", "jxl",  "jp2", "j2k",  "jpf", "jpx", "qoi", "dds",
-    "jxr",  "wdp",
+    "avif", "heic", "heif", "tif", "tiff", "dib", "ico", "cur", "ani",  "pnm",
+    "pbm",  "pgm",  "ppm",  "pam", "pcx",  "ras", "xbm", "xpm", "icns", "jxl",
+    "jp2",  "j2k",  "jpf",  "jpx", "dds",  "jxr", "wdp",
 };
 pub fn intersect(names: []const []const u8, out: [][]const u8) usize {
     assert(names.len <= 256);
@@ -76,10 +147,27 @@ test "fit bounds dimensions without enlarging and rejects excessive pixels" {
 
 test "installed extensions intersect a fixed inventory without duplicates" {
     var out: [known_extensions.len][]const u8 = undefined;
-    const n = intersect(&.{ "svg", "pdf", "TIFF", "tiff", "bmp", "unknown" }, &out);
+    const n = intersect(&.{ "svg", "pdf", "TIFF", "tiff", "ico", "unknown" }, &out);
     try std.testing.expectEqual(@as(usize, 2), n);
     try std.testing.expectEqualStrings("tiff", out[0]);
-    try std.testing.expectEqualStrings("bmp", out[1]);
+    try std.testing.expectEqualStrings("ico", out[1]);
     try std.testing.expectEqual(@as(usize, 0), intersect(&.{}, &out));
-    try std.testing.expectEqual(@as(usize, 1), intersect(&.{ "bmp", "webp" }, out[0..1]));
+    try std.testing.expectEqual(@as(usize, 1), intersect(&.{ "ico", "tiff" }, out[0..1]));
+}
+
+test "a bundled picture decodes at its size and shrinks to the bounds" {
+    const t = std.testing;
+    const fixtures = @import("wuffs_fixtures.zig");
+    const red: fixtures.Rgba = .{ 255, 0, 0, 255 };
+    const blue: fixtures.Rgba = .{ 0, 0, 255, 255 };
+    const file = comptime fixtures.qoi(4, 2, &.{ red, red, blue, blue, red, red, blue, blue });
+    var out: [4 * 2 * 4]u8 = undefined;
+    const full = try decode_bundled(file, &out, 100, 100);
+    try t.expectEqual(Size{ .width = 4, .height = 2, .native_w = 4, .native_h = 2 }, full);
+    try t.expectEqualSlices(u8, &.{ 0, 0, 255, 255 }, out[0..4]);
+    const half = try decode_bundled(file, &out, 2, 2);
+    try t.expectEqual(Size{ .width = 2, .height = 1, .native_w = 4, .native_h = 2 }, half);
+    try t.expectEqualSlices(u8, &.{ 0, 0, 255, 255, 255, 0, 0, 255 }, out[0..8]);
+    try t.expectError(error.TooLarge, decode_bundled(file, out[0..8], 2, 2));
+    try t.expectError(error.NotImage, decode_bundled("not a picture", &out, 2, 2));
 }

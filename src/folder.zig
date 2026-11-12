@@ -17,29 +17,34 @@ pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
         "png", "jpg",  "jpeg", "jpe",  "jfif", "gif", "heic", "heif", "webp", "avif",
         "tif", "tiff", "bmp",  "ico",  "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
         "pbm", "jxl",  "mpo",  "pict", "pct",  "dng", "cr3",  "rw2",  "rwl",  "3fr",
+        "qoi",
     }
 else
-    baseline_extensions;
+    always_extensions;
 
 const baseline_extensions: []const []const u8 = &.{ "png", "jpg", "jpeg", "gif" };
+/// What opens with no system decoder: nanoui's formats, then the bundled decoders'.
+const always_extensions: []const []const u8 = &.{
+    "png", "jpg", "jpeg", "gif", "bmp", "qoi", "tga", "webp",
+};
 const extensions_max: u32 = 64;
 var extension_table: [extensions_max][]const u8 = undefined;
 var extensions_initialized = false;
 
-/// Linux and Windows add the installed system decoders to the baseline;
-/// a failed enumeration leaves the baseline alone.
+/// Linux and Windows add the installed system decoders; a failed enumeration
+/// adds none.
 pub fn init_extensions() void {
     if (extensions_initialized) return;
-    const rest = extension_table[baseline_extensions.len..];
+    const rest = extension_table[always_extensions.len..];
     const count = switch (builtin.os.tag) {
         .linux => @import("decode_linux.zig").extensions(rest),
         .windows => @import("decode_windows.zig").extensions(rest),
         else => return,
     };
-    @memcpy(extension_table[0..baseline_extensions.len], baseline_extensions);
-    extensions = extension_table[0 .. baseline_extensions.len + count];
+    @memcpy(extension_table[0..always_extensions.len], always_extensions);
+    extensions = extension_table[0 .. always_extensions.len + count];
     extensions_initialized = true;
-    assert(extensions.len >= baseline_extensions.len);
+    assert(extensions.len >= always_extensions.len);
     assert(extensions.len <= extensions_max);
 }
 

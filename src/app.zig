@@ -18,10 +18,8 @@ const recent_mod = @import("recent.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
-pub const current_pixels_max: u32 = if (builtin.os.tag == .macos)
-    0
-else
-    decode.pixels_max * 4;
+/// Room for the largest picture at full size.
+pub const current_pixels_max: u32 = decode.pixels_max * 4;
 pub const message_len_max: u32 = 512;
 pub const title_len_max: u32 = 512;
 
@@ -395,7 +393,8 @@ pub const State = struct {
     }
 
     fn decode_current(s: *State, bytes: []const u8) !Source {
-        if (builtin.os.tag == .macos) return .{ .encoded = bytes };
+        const system = builtin.os.tag == .macos and !decode.bundled_only(bytes);
+        if (system) return .{ .encoded = bytes };
         const full = std.math.maxInt(u32);
         const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
             const portable = folder_mod.is_baseline_name(s.basename());

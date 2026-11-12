@@ -23,7 +23,10 @@ section that matches its tag.
   sort order, the title text, a hidden title bar (Windows) and always on top (`t`).
 - Keys can be rebound with `key.<action>` lines in `settings.conf`.
 - Opened files and folders are remembered in a recent list.
-- macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI and PBM pictures.
+- BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
+  and libwebp v1.6.0); the archives carry their license notices.
+- macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI, PBM, JPEG XL, MPO, PICT and some camera RAW
+  pictures (DNG, CR3, RW2, RWL, 3FR).
 - Linux: pictures decode through gdk-pixbuf when it is installed (WebP, AVIF, HEIC, TIFF, BMP,
   ICO and more); Move to Trash; reveal selects the file; touchpad pan and pinch; the window
   takes the picture's size on GTK 4.

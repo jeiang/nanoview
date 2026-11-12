@@ -254,6 +254,34 @@ test "ImageIO formats display directly and from preloaded pixels" {
     }
 }
 
+test "bundled formats display directly and from preloaded pixels on every system" {
+    const fixtures = @import("wuffs_fixtures.zig");
+    const dot: fixtures.Rgba = .{ 0, 128, 255, 255 };
+    const dots: [4]fixtures.Rgba = @splat(dot);
+    const files = .{
+        .{ "b.qoi", comptime fixtures.qoi(2, 2, &dots) },
+        .{ "b.tga", comptime fixtures.tga32(2, 2, &dots) },
+        .{ "b.bmp", comptime fixtures.bmp24(2, 2, &dots) },
+        .{ "b.webp", @embedFile("testdata/webp_lossy.webp") },
+    };
+    inline for (files) |file| {
+        const f = try Fixture.create();
+        defer f.destroy();
+        try f.write_png("a.png", 32, 32);
+        try f.tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
+        try f.open(file[0]);
+        try testing.expectEqual(app.Status.shown, f.state.status);
+        try testing.expect(!f.tester.containsText("Cannot show"));
+        try f.open("a.png");
+        f.state.preload.set_bounds(960, 720);
+        _ = drain(&f.state.preload);
+        _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+        try testing.expectEqual(app.Status.shown, f.state.status);
+        try testing.expect(f.state.source == .pixels);
+        try testing.expect(!f.tester.containsText("Cannot show"));
+    }
+}
+
 test "opening another folder empties the slots" {
     const f = try Fixture.create();
     defer f.destroy();
