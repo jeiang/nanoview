@@ -37,9 +37,10 @@ for target in x86_64-linux-gnu aarch64-linux-gnu; do
     tar -C "$prefix" -czf "$dist/nanoview-$version-${target%-gnu}.tar.gz" bin share
 done
 
-target=x86_64-windows-gnu
-prefix="zig-out/release/$target"
-zig build -Dtarget="$target" -Doptimize=ReleaseSafe --prefix "$prefix"
-(cd "$prefix/bin" && zip -q "$OLDPWD/$dist/nanoview-$version-x86_64-windows.zip" nanoview.exe)
+for target in x86_64-windows-gnu aarch64-windows-gnu; do
+    prefix="zig-out/release/$target"
+    zig build -Dtarget="$target" -Doptimize=ReleaseSafe --prefix "$prefix"
+    (cd "$prefix/bin" && zip -q "$OLDPWD/$dist/nanoview-$version-${target%-gnu}.zip" nanoview.exe)
+done
 
 (cd "$dist" && shasum -a 256 -- * > SHA256SUMS)
