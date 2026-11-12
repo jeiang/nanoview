@@ -58,6 +58,8 @@ pub const Surface = struct {
     ticking: bool = false,
     frame_posted: bool = false,
     tracking: bool = false,
+    /// The current wheel gesture's precision and its last event's time.
+    wheel: WheelGesture = .{},
     theme_override: ?Theme = null,
     /// The system's appearance as last read: a window that names no theme of
     /// its own follows it, and `WM_SETTINGCHANGE` says when it changed.
@@ -508,7 +510,7 @@ pub const Surface = struct {
                     pace_side.onInput(self);
                     return 0;
                 }
-                self.ctx.input.precise = preciseWheel(raw);
+                self.ctx.input.precise = self.wheel.classify(clock.now(), raw);
                 const delta = @as(f32, @floatFromInt(raw)) * 0.4;
                 // Turns between two refreshes are one frame: a scroll box's
                 // offset moves at once, a view's wheel adds up until built.
@@ -527,7 +529,7 @@ pub const Surface = struct {
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
-                self.ctx.input.precise = preciseWheel(raw);
+                self.ctx.input.precise = self.wheel.classify(clock.now(), raw);
                 // Match the finger/content direction of vertical scrolling.
                 self.ctx.input.scroll.x -= @as(f32, @floatFromInt(raw)) * 0.4;
                 pace_side.onInput(self);
@@ -561,16 +563,33 @@ pub const Surface = struct {
     }
 };
 
-fn preciseWheel(delta: i16) bool {
-    return @rem(delta, 120) != 0;
-}
+/// Precision touchpads send wheel deltas that are not multiples of
+/// WHEEL_DELTA (120). One such event marks the gesture precise until the
+/// wheel rests for `rest`, so a touchpad event that happens to be a
+/// multiple of 120 does not turn into a wheel step mid-gesture.
+const WheelGesture = struct {
+    precise: bool = false,
+    last: f64 = -std.math.inf(f64),
 
-test "fractional wheel deltas identify precision scrolling" {
-    try std.testing.expect(preciseWheel(1));
-    try std.testing.expect(preciseWheel(-119));
-    try std.testing.expect(!preciseWheel(120));
-    try std.testing.expect(!preciseWheel(-240));
-    try std.testing.expect(!preciseWheel(0));
+    const rest: f64 = 0.1;
+
+    fn classify(g: *WheelGesture, now: f64, delta: i16) bool {
+        if (now - g.last > rest) g.precise = false;
+        g.last = now;
+        if (@rem(delta, 120) != 0) g.precise = true;
+        return g.precise;
+    }
+};
+
+test "wheel precision holds for a gesture and resets after a rest" {
+    var g: WheelGesture = .{};
+    try std.testing.expect(!g.classify(0, 120));
+    try std.testing.expect(!g.classify(0.05, -240));
+    try std.testing.expect(g.classify(0.1, 17));
+    try std.testing.expect(g.classify(0.15, 120));
+    try std.testing.expect(g.classify(0.2, 0));
+    try std.testing.expect(!g.classify(0.5, 120));
+    try std.testing.expect(g.classify(1.0, -119));
 }
 
 /// Whether the environment variable `name` is set to something but "0":
