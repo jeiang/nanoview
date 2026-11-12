@@ -39,8 +39,10 @@ pub fn main(init: std.process.Init) !void {
         files[count] = arg;
         count += 1;
     }
-    // Before the window: a process that hands its files over shows none.
-    if (state.settings.single_instance and instance.hand_over(init.io, files[0..count])) return;
+    // Before the slow startup: a process that hands its files over shows
+    // none, and one started in the same instant finds this one.
+    const owner = start_instance(init.io, files[0..count]) orelse return;
+    defer if (owner) instance.platform.release();
     load_recent(init);
     // Elsewhere nanoui would add its roles' keys (Ctrl+Q): no menu bar.
     if (builtin.os.tag == .macos) app.setMenu(@import("menus.zig").menu_bar(&state)) catch |err| {
@@ -68,15 +70,24 @@ pub fn main(init: std.process.Init) !void {
         .always_on_top = state.settings.always_on_top,
         .content = .{ .view = .init(&state, view.view) },
     });
-    if (state.settings.single_instance) {
-        instance.platform.listen(&state, State.on_instance) catch |err| {
-            state.notify("Single instance: {s}", .{@errorName(err)});
-        };
-    }
+    if (owner) instance.platform.listen(&state, State.on_instance) catch {
+        state.notify("Single instance is off: cannot watch for other nanoviews", .{});
+    };
     try state.preload.start();
     defer state.preload.stop();
     state.open_paths(files[0..count]);
     try app.run();
+}
+
+/// Null when the files went to the running nanoview: this process is done.
+/// True when this process is the one later ones hand their files to.
+fn start_instance(io: std.Io, files: []const []const u8) ?bool {
+    if (!state.settings.single_instance) return false;
+    const started = instance.start(io, files) catch |err| {
+        state.notify("Single instance is off: {s}", .{instance.describe(err)});
+        return false;
+    };
+    return if (started == .handed) null else true;
 }
 
 fn load_settings(init: std.process.Init) void {
