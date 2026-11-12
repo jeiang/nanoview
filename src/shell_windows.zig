@@ -2,12 +2,23 @@ const std = @import("std");
 const paths = @import("paths.zig");
 const assert = std.debug.assert;
 const wide_max = paths.path_max + 2;
+const fo_delete: u32 = 3;
+const fof_silent: u16 = 0x0004;
+const fof_noconfirmation: u16 = 0x0010;
+const fof_allowundo: u16 = 0x0040;
+const fof_noerrorui: u16 = 0x0400;
+/// Without this, a file the Recycle Bin cannot take (a network share, a
+/// drive with no bin, a file over the bin's limit) is destroyed silently:
+/// `fof_noconfirmation` hides the prompt. With it the shell asks, and a
+/// refusal comes back as `aborted`.
+const fof_wantnukewarning: u16 = 0x4000;
 const Operation = extern struct {
     window: ?*anyopaque = null,
-    function: u32 = 3,
+    function: u32 = fo_delete,
     from: [*:0]const u16,
     to: ?[*:0]const u16 = null,
-    flags: u16 = 0x0040 | 0x0010 | 0x0004 | 0x0400,
+    flags: u16 = fof_allowundo | fof_noconfirmation | fof_silent | fof_noerrorui |
+        fof_wantnukewarning,
     aborted: i32 = 0,
     mappings: ?*anyopaque = null,
     title: ?[*:0]const u16 = null,
