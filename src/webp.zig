@@ -22,6 +22,7 @@ pub const Error = error{
     OutputTooSmall,
     WorkTooSmall,
     OutOfMemory,
+    Busy,
 };
 
 pub const Info = struct {
@@ -87,6 +88,31 @@ extern fn nv_webp_demux_new(data: [*]const u8, size: usize, out: *?*anyopaque) c
 extern fn nv_webp_demux_delete(demux: ?*anyopaque) void;
 extern fn nv_webp_demux_canvas(demux: *const anyopaque, out: *Canvas) void;
 extern fn nv_webp_demux_frame(demux: *const anyopaque, number: u32, out: *FrameC) c_int;
+
+/// libwebp fills its function tables on a decoder's first use with no lock (its
+/// thread support is off), and the window and the preload worker both decode. One
+/// decode at a time closes that; the wait is at most one frame's decode.
+var decode_lock: std.atomic.Mutex = .unlocked;
+/// Far more spins than the longest decode lasts: reaching it means a lost unlock.
+const lock_spins_max: u64 = 1 << 36;
+
+fn decode_bgra(
+    data: [*]const u8,
+    size: usize,
+    out: []u8,
+    stride: u32,
+    width: u32,
+    height: u32,
+) Error!void {
+    assert(width > 0 and height > 0 and stride >= width * bytes_per_pixel);
+    var spins: u64 = 0;
+    while (!decode_lock.tryLock()) : (spins += 1) {
+        if (spins == lock_spins_max) return error.Busy;
+        std.atomic.spinLoopHint();
+    }
+    defer decode_lock.unlock();
+    try check(nv_webp_decode_bgra(data, size, out.ptr, out.len, stride, width, height));
+}
 
 /// libwebp's VP8StatusCode values.
 const Status = enum(c_int) {
@@ -180,15 +206,14 @@ pub fn decode_first(bytes: []const u8, out_bgra: []u8, work: []u8) Error!Size {
     if (out_bgra.len < canvas_bytes) return error.OutputTooSmall;
     const canvas = out_bgra[0..@intCast(canvas_bytes)];
     if (features.has_animation == 0) {
-        try check(nv_webp_decode_bgra(
+        try decode_bgra(
             bytes.ptr,
             bytes.len,
-            canvas.ptr,
-            canvas.len,
+            canvas,
             size.width * bytes_per_pixel,
             size.width,
             size.height,
-        ));
+        );
         return size;
     }
     const demux = try demux_open(bytes);
@@ -226,15 +251,14 @@ fn paste(canvas: []u8, width: u32, height: u32, frame: FrameC) Error!void {
     const offset = (@as(usize, rect.y) * width + rect.x) * bytes_per_pixel;
     assert(offset < canvas.len);
     const target = canvas[offset..];
-    try check(nv_webp_decode_bgra(
+    try decode_bgra(
         frame.data,
         frame.size,
-        target.ptr,
-        target.len,
+        target,
         width * bytes_per_pixel,
         rect.width,
         rect.height,
-    ));
+    );
 }
 
 /// Rounds `x / 255` for `x` up to 255 * 255.
@@ -346,15 +370,14 @@ pub const Animation = struct {
         if (frame.blend != 0 and frame.has_alpha != 0) {
             const bytes = @as(usize, rect.width) * rect.height * bytes_per_pixel;
             const source = self.scratch[0..bytes];
-            try check(nv_webp_decode_bgra(
+            try decode_bgra(
                 frame.data,
                 frame.size,
-                source.ptr,
-                source.len,
+                source,
                 rect.width * bytes_per_pixel,
                 rect.width,
                 rect.height,
-            ));
+            );
             blend_over(self.canvas, self.width, rect, source);
         } else {
             try paste(self.canvas, self.width, self.height, frame);
