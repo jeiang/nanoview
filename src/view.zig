@@ -23,6 +23,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     c.wants_wheel = true;
     c.wants_moves = c.input.down;
     keys(s, c);
+    slideshow(s, c);
 
     const root = ui.div(c).sizeFull().center().bg(c.theme.background);
     defer root.end();
@@ -54,11 +55,32 @@ fn body(s: *State, c: *ui.Context) void {
 }
 
 const message_seconds: f64 = 4;
+fn slideshow(s: *State, c: *ui.Context) void {
+    if (s.trash_pending) {
+        s.slideshow_at = null;
+        return;
+    }
+    if (!s.slideshow_running) return;
+    const seconds: f64 = @floatFromInt(@max(1, s.settings.slideshow_seconds));
+    if (s.slideshow_at == null) s.slideshow_at = c.time + seconds;
+    if (c.time >= s.slideshow_at.?) {
+        s.step(if (s.settings.slideshow_reverse) -1 else 1);
+        s.slideshow_at = c.time + seconds;
+    }
+    if (s.slideshow_running) c.frameIn(@floatCast(s.slideshow_at.? - c.time));
+}
 
 /// What `State.notify` last said, for a few seconds, above the info line.
 fn message(s: *State, c: *ui.Context) void {
     assert(s.message_len <= app.message_len_max);
     if (s.message_len == 0) return;
+    if (s.trash_pending) {
+        const box = ui.div(c).absolute().offset(12, c.size.h - 100).px(8).py(4)
+            .bg(ui.Color.black.alpha(0.8));
+        defer box.end();
+        ui.text(c, s.message(), .{ .size = info_text_size, .color = ui.Color.white });
+        return;
+    }
     // A command has no clock: the first frame that sees its message starts it.
     if (s.message_until == null) s.message_until = c.time + message_seconds;
     const left = s.message_until.? - c.time;
@@ -133,11 +155,7 @@ fn drops(s: *State, c: *ui.Context, index: u32) void {
     c.acceptDrop(index);
     const drop = c.dropAt(index) orelse return;
     if (drop.urls.len == 0) return;
-    // The drop lasts one frame: copy before open_path reads it.
-    var buf: [paths.path_max]u8 = undefined;
-    const dropped = paths.from_file_url(drop.urls[0], &buf) orelse return;
-    assert(dropped.len > 0);
-    s.open_path(dropped);
+    s.open_paths(drop.urls);
 }
 
 fn draw(s: *State, c: *ui.Context, key: []const u8) void {
@@ -223,10 +241,11 @@ fn info(s: *State, c: *ui.Context) void {
         })
     else
         c.print("{s} · {d}×{d} · {d}%", .{ name, pw, ph, vp.percent() });
-    const box = ui.div(c).absolute().offset(12, c.size.h - 40).px(8).py(4).rounded(6)
+    const box = ui.div(c).absolute().offset(12, c.size.h - 60).px(8).py(4).rounded(6)
         .bg(ui.Color.black.alpha(0.6));
     defer box.end();
     ui.text(c, line, .{ .size = info_text_size, .color = ui.Color.white });
+    ui.text(c, s.metadata.line(), .{ .size = info_text_size, .color = ui.Color.white });
 }
 
 fn pointer(s: *State, c: *ui.Context) void {
@@ -272,11 +291,16 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     assert(sc.key != 0);
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
+    if (c.input.cmd or c.input.ctrl or c.input.alt or c.input.shift != sc.shift) return false;
     // `?Key`: nanoui does not export its key enum from `ui`.
     const Key = @FieldType(@FieldType(ui.Context, "input"), "key");
     const want: Key = switch (sc.key) {
         ui.Shortcut.left => .left,
         ui.Shortcut.right => .right,
+        ui.Shortcut.home => .home,
+        ui.Shortcut.end => .end,
+        ui.Shortcut.enter => .enter,
+        ui.Shortcut.f(5) => .f5,
         ui.Shortcut.escape => .escape,
         ui.Shortcut.forward_delete => .delete,
         else => null,
@@ -305,6 +329,15 @@ fn keys(s: *State, c: *ui.Context) void {
 pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
     assert(s.path_len <= paths.path_max);
     const vp = &s.viewport;
+    const pending = s.trash_pending;
+    if (pending) {
+        s.trash_pending = false;
+        s.message_len = 0;
+    }
+    if (action == .confirm_trash) {
+        if (pending) s.trash();
+        return;
+    }
     const shown = s.status == .shown;
     const cx = c.size.w / 2;
     const cy = c.size.h / 2;
@@ -313,6 +346,16 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .open => s.open_dialog(),
         .next => s.step(1),
         .previous => s.step(-1),
+        .first => s.endpoint(false),
+        .last => s.endpoint(true),
+        .random => s.random(),
+        .reload => s.reload(),
+        .slideshow => {
+            s.slideshow_running = !s.slideshow_running;
+            s.slideshow_at = null;
+            const text = if (s.slideshow_running) "Slideshow started" else "Slideshow stopped";
+            s.notify("{s}", .{text});
+        },
         .zoom_in => if (shown) vp.zoom_about(cx, cy, viewport.zoom_step),
         .zoom_out => if (shown) vp.zoom_about(cx, cy, 1 / viewport.zoom_step),
         .fit => if (shown) vp.set_fit(),
@@ -322,7 +365,8 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .rotate_right => rotate(s, c, 1),
         .rotate_left => rotate(s, c, 3),
         .info => s.info_shown = !s.info_shown,
-        .trash => s.trash(),
+        .trash => s.request_trash(),
+        .confirm_trash => unreachable,
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
     }

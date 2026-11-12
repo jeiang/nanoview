@@ -40,12 +40,16 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     try state.preload.start();
     defer state.preload.stop();
-    // The first argument that is not a flag (this skips `--nanoui-*`).
-    for (args[@min(args.len, 1)..]) |arg| {
+    var files: [@import("folder.zig").entries_max][]const u8 = undefined;
+    var count: u32 = 0;
+    const arguments = args[@min(args.len, 1)..];
+    for (arguments[0..@min(arguments.len, files.len)]) |arg| {
         if (std.mem.startsWith(u8, arg, "--")) continue;
-        state.open_path(arg);
-        break;
+        if (count == files.len) break;
+        files[count] = arg;
+        count += 1;
     }
+    state.open_paths(files[0..count]);
     try app.run();
 }
 

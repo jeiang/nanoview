@@ -9,6 +9,7 @@ const orientation = @import("orientation.zig");
 const sort_order = @import("sort_order.zig");
 const preload_mod = @import("preload.zig");
 const settings_mod = @import("settings.zig");
+const metadata_mod = @import("metadata.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -71,6 +72,14 @@ pub const State = struct {
     message_buf: [message_len_max]u8 = undefined,
     message_len: u32 = 0,
     message_until: ?f64 = null, // on the view's clock; null until a frame shows it
+    folder_mtime: i128 = 0,
+    selection: folder_mod.Folder = .{},
+    selection_only: bool = false,
+    random_state: u64 = 1,
+    slideshow_running: bool = false,
+    slideshow_at: ?f64 = null,
+    trash_pending: bool = false,
+    metadata: metadata_mod.Metadata = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -85,6 +94,8 @@ pub const State = struct {
         assert(file_buffer.len == file_size_max);
         s.* = .{ .io = io, .gpa = gpa, .file_buffer = file_buffer };
         s.preload.init(io, &s.folder, pool, scratch);
+        s.random_state = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
+        if (s.random_state == 0) s.random_state = 1;
         assert(s.status == .empty and s.folder.count == 0);
     }
 
@@ -116,30 +127,104 @@ pub const State = struct {
 
     /// The single entry for an argument, the dialog, a drop and macOS open-file.
     pub fn open_path(s: *State, file_path: []const u8) void {
-        assert(s.path_len <= paths.path_max);
-        // No picture to name in a failure: an unusable path changes nothing.
-        if (file_path.len == 0 or file_path.len > paths.path_max) return;
-        // Absolute, so the parent folder and its `.DS_Store` can be found.
-        var real_buf: [paths.path_max]u8 = undefined;
-        const real = if (std.Io.Dir.cwd().realPathFile(s.io, file_path, &real_buf)) |len|
-            real_buf[0..len]
-        else |_|
-            file_path;
-        @memcpy(s.path_buf[0..real.len], real);
-        s.path_len = @intCast(real.len);
-        const parent = std.fs.path.dirname(s.path()) orelse ".";
+        s.open_paths(&.{file_path});
+    }
+
+    fn resolve(s: *State, input: []const u8, buf: *[paths.path_max]u8) ?[]const u8 {
+        var decoded: [paths.path_max]u8 = undefined;
+        const file = if (std.mem.startsWith(u8, input, "file://"))
+            paths.from_file_url(input, &decoded) orelse return null
+        else
+            input;
+        if (file.len == 0 or file.len > paths.path_max) return null;
+        const len = std.Io.Dir.cwd().realPathFile(s.io, file, buf) catch {
+            @memcpy(buf[0..file.len], file);
+            return buf[0..file.len];
+        };
+        return buf[0..len];
+    }
+
+    pub fn open_paths(s: *State, files: []const []const u8) void {
+        if (files.len == 0) return;
+        var buf: [paths.path_max]u8 = undefined;
+        const first = s.resolve(files[0], &buf) orelse {
+            s.notify("Could not open path", .{});
+            return;
+        };
+        const st = std.Io.Dir.cwd().statFile(s.io, first, .{}) catch null;
+        const directory = if (st) |v| v.kind == .directory else false;
+        const parent = if (directory) first else std.fs.path.dirname(first) orelse ".";
         @memcpy(s.dir_buf[0..parent.len], parent);
         s.dir_len = @intCast(parent.len);
-        // A folder that cannot be listed still shows the file, alone. The
-        // worker reads names from the folder: hold its lock while it changes.
+        @memcpy(s.path_buf[0..first.len], first);
+        s.path_len = @intCast(first.len);
+        if (s.trash_pending) s.message_len = 0;
+        s.trash_pending = false;
+        s.slideshow_at = null;
+        s.selection.reset();
+        s.selection_only = !directory and files.len > 1;
+        for (files[0..@min(files.len, folder_mod.entries_max)]) |file| {
+            const real = s.resolve(file, &buf) orelse {
+                s.selection_only = false;
+                break;
+            };
+            if (!std.mem.eql(u8, std.fs.path.dirname(real) orelse ".", s.dir())) {
+                s.selection_only = false;
+                break;
+            }
+            if (s.selection.find(std.fs.path.basename(real)) == null)
+                _ = s.selection.add(std.fs.path.basename(real));
+        }
+        s.rescan();
+        if (directory) {
+            if (s.folder.count > 0) s.show_index(0) else {
+                s.clear();
+                s.notify("No pictures in this folder", .{});
+            }
+        } else {
+            s.index = s.folder.find(s.basename());
+            s.load();
+        }
+    }
+
+    fn directory_mtime(s: *State) i128 {
+        const st = std.Io.Dir.cwd().statFile(s.io, s.dir(), .{}) catch return 0;
+        return st.mtime.nanoseconds;
+    }
+
+    fn rescan(s: *State) void {
         const order = sort_order.detect(s.io, s.dir());
         s.preload.lock();
-        s.folder.scan(s.io, s.dir(), order) catch s.folder.reset();
+        defer s.preload.unlock();
+        s.folder.scan(s.io, s.dir(), order) catch {
+            s.folder.reset();
+            s.notify("Could not read folder", .{});
+        };
+        if (s.selection_only) {
+            var i = s.folder.count;
+            while (i > 0) {
+                i -= 1;
+                if (s.selection.find(s.folder.name(i)) == null) s.folder.remove(i);
+            }
+        }
+        s.folder_mtime = s.directory_mtime();
         s.preload.invalidate(s.dir());
-        s.preload.unlock();
-        s.index = s.folder.find(s.basename());
+    }
+
+    /// Returns the old position when the displayed file disappeared.
+    fn refresh(s: *State, force: bool) ?u32 {
+        if (s.dir_len == 0) return null;
+        if (!force and s.directory_mtime() == s.folder_mtime) return null;
+        const old = s.index;
+        s.rescan();
+        s.index = if (s.path_len > 0) s.folder.find(s.basename()) else null;
+        return if (s.index == null) old else null;
+    }
+
+    pub fn reload(s: *State) void {
+        if (s.path_len == 0) return;
+        _ = s.refresh(true);
         s.load();
-        assert(s.status != .empty);
     }
 
     fn fail(s: *State) void {
@@ -167,6 +252,8 @@ pub const State = struct {
         s.turns_user = 0;
         s.drag_last = null;
         s.promote_failed = false;
+        s.slideshow_at = null;
+        s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
         if (slot) |n| {
@@ -220,14 +307,54 @@ pub const State = struct {
         assert(s.source == .encoded or s.promote_failed);
     }
 
-    /// `delta` is +1 or -1; wraps around the folder.
+    /// Rescanning preserves the filename, or the missing file's old position.
     pub fn step(s: *State, delta: i32) void {
         assert(delta == 1 or delta == -1);
+        s.slideshow_at = null;
+        const missing = s.refresh(false);
+        const count = s.folder.count;
+        if (count == 0) {
+            if (s.slideshow_running) s.notify("No pictures in this folder", .{});
+            s.slideshow_running = false;
+            return;
+        }
+        if (missing) |old| {
+            const before = if (old > 0) old - 1 else if (s.settings.loop) count - 1 else 0;
+            const next = if (delta > 0) old else before;
+            s.show_index(if (next >= count and s.settings.loop) 0 else @min(next, count - 1));
+            return;
+        }
+        const from = s.index orelse {
+            s.show_index(if (delta > 0) 0 else count - 1);
+            return;
+        };
+        if (!s.settings.loop and
+            ((delta > 0 and from == count - 1) or (delta < 0 and from == 0)))
+        {
+            s.notify("{s}", .{if (delta > 0) "Last picture" else "First picture"});
+            s.slideshow_running = false;
+            return;
+        }
+        s.show_index(if (delta > 0) (from + 1) % count else (from + count - 1) % count);
+    }
+
+    pub fn endpoint(s: *State, last: bool) void {
+        _ = s.refresh(false);
+        if (s.folder.count > 0) s.show_index(if (last) s.folder.count - 1 else 0);
+    }
+
+    pub fn random(s: *State) void {
+        _ = s.refresh(false);
         const count = s.folder.count;
         if (count == 0) return;
-        const from: u32 = s.index orelse if (delta > 0) count - 1 else 0;
-        assert(from < count);
-        const next = if (delta > 0) (from + 1) % count else (from + count - 1) % count;
+        s.random_state ^= s.random_state << 13;
+        s.random_state ^= s.random_state >> 7;
+        s.random_state ^= s.random_state << 17;
+        const choices = if (s.index != null and count > 1) count - 1 else count;
+        var next: u32 = @intCast(s.random_state % choices);
+        if (s.index) |i| {
+            if (count > 1 and next >= i) next += 1;
+        }
         s.show_index(next);
     }
 
@@ -235,20 +362,22 @@ pub const State = struct {
         assert(s.path_len <= paths.path_max);
         const result = nanoui.dialog.open(s.gpa, .{ .extensions = folder_mod.extensions });
         const picked = (result catch return) orelse return;
-        var buf: [paths.path_max]u8 = undefined;
-        var len: usize = 0;
-        if (picked.len > 0 and picked[0].len <= paths.path_max) {
-            len = picked[0].len;
-            @memcpy(buf[0..len], picked[0]);
-        }
+        s.open_paths(picked);
         for (picked) |p| s.gpa.free(p);
         s.gpa.free(picked);
-        if (len > 0) s.open_path(buf[0..len]);
     }
 
-    /// No confirmation: the trash is recoverable.
+    pub fn request_trash(s: *State) void {
+        if (s.status == .empty) return;
+        if (!s.settings.trash_confirm) return s.trash();
+        s.trash_pending = true;
+        s.notify("Move {s} to the Trash? Enter to confirm, Escape to cancel", .{s.basename()});
+    }
+
     pub fn trash(s: *State) void {
         if (s.status == .empty) return;
+        s.slideshow_at = null;
+        s.trash_pending = false;
         assert(s.path_len > 0);
         if (!nanoui.shell.trash(s.path())) {
             s.notify("Could not move {s} to the Trash", .{s.basename()});
@@ -262,10 +391,15 @@ pub const State = struct {
             if (s.folder.count == 0) {
                 s.clear();
             } else {
-                s.show_index(@min(i, s.folder.count - 1));
+                const count = s.folder.count;
+                const previous = s.settings.after_trash == .previous;
+                const next = if (previous and i > 0) i - 1 else if (previous)
+                    (if (s.settings.loop) count - 1 else 0)
+                else if (i < count) i else (if (s.settings.loop) 0 else count - 1);
+                s.show_index(next);
             }
         } else if (s.folder.count > 0) {
-            s.step(1);
+            s.step(if (s.settings.after_trash == .previous) -1 else 1);
         } else {
             s.clear();
         }
@@ -323,7 +457,7 @@ pub const State = struct {
     pub fn on_open_files(ctx: *anyopaque, files: []const []const u8) void {
         const s: *State = @ptrCast(@alignCast(ctx));
         assert(s.path_len <= paths.path_max);
-        if (files.len > 0) s.open_path(files[0]);
+        s.open_paths(files);
     }
 
     /// Promoting changes the key, so nanoui reads the new source.
