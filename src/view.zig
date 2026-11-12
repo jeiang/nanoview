@@ -12,6 +12,7 @@ const keymap = @import("keymap.zig");
 const settings_mod = @import("settings.zig");
 const playback = @import("playback.zig");
 const pages = @import("pages.zig");
+const save = @import("save.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -460,6 +461,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .pause, .next_frame, .slower, .faster => playback.perform(s, action),
         .next_page => pages.turn(s, 1),
         .previous_page => pages.turn(s, -1),
+        .save_frame => save.save_frame(s),
     }
 }
 

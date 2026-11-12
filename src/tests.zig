@@ -6,6 +6,8 @@ const view = @import("view.zig");
 const paths = @import("paths.zig");
 const preload = @import("preload.zig");
 const animation = @import("animation.zig");
+const decode = @import("decode.zig");
+const save_mod = @import("save.zig");
 const State = app.State;
 const testing = std.testing;
 
@@ -27,6 +29,7 @@ test {
     _ = @import("webp.zig");
     _ = @import("wuffs.zig");
     _ = @import("animation.zig");
+    _ = @import("png_save.zig");
     _ = @import("decode_windows.zig");
 }
 
@@ -1051,4 +1054,77 @@ test "pages of a TIFF and sizes of an icon turn with page down and page up" {
     try testing.expect(f.tester.containsText("Single page"));
     try f.open("a.tif");
     try testing.expectEqual(@as(u32, 0), f.state.page);
+}
+
+/// Opaque red twice, then half-transparent blue beside opaque green.
+const apng_alpha = anim_fixtures.apng(2, 1, 0, &.{
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 2,
+        .height = 1,
+        .delay_num = 1,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{ .{ 255, 0, 0, 255 }, .{ 255, 0, 0, 255 } },
+    },
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 2,
+        .height = 1,
+        .delay_num = 1,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{ .{ 0, 0, 255, 128 }, .{ 0, 255, 0, 255 } },
+    },
+});
+
+fn saved_path(f: *Fixture, name: []const u8, buf: []u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ f.dir_buf[0..f.dir_len], name }) catch unreachable;
+}
+
+test "save frame writes the shown frame unrotated and it reads back the same" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.png", apng_alpha);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = '.' });
+    try testing.expectEqual(@as(u32, 1), f.state.player.frame_index);
+    var shown: [8]u8 = undefined;
+    @memcpy(&shown, f.state.player.canvas()[0..8]);
+    _ = f.tester.shortcut(.{ .key = 'r' });
+    var path_buf: [paths.path_max]u8 = undefined;
+    save_mod.save_to(f.state, saved_path(f, "frame.png", &path_buf));
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Saved frame.png"));
+    const gpa = testing.allocator;
+    const bytes = try f.tmp.dir.readFileAlloc(testing.io, "frame.png", gpa, .unlimited);
+    defer testing.allocator.free(bytes);
+    try testing.expect(animation.detect(bytes) == null);
+    var back: [8]u8 = undefined;
+    const size = try decode.decode_fit(bytes, &back, 100, 100, 0);
+    try testing.expectEqual(@as(u32, 2), size.width);
+    try testing.expectEqual(@as(u32, 1), size.height);
+    for (shown, back) |a, b| try testing.expect(@abs(@as(i16, a) - b) <= 1);
+    try testing.expect(back[3] == 128 and back[0] >= 127); // blue kept its alpha
+    try f.open("frame.png");
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("2×1"));
+    // A still that nanoui decodes is read again at full size.
+    try f.write_png("white.png", 4, 3);
+    try f.open("white.png");
+    save_mod.save_to(f.state, saved_path(f, "white copy.png", &path_buf));
+    const copy = try f.tmp.dir.readFileAlloc(testing.io, "white copy.png", gpa, .unlimited);
+    defer testing.allocator.free(copy);
+    var white: [4 * 3 * 4]u8 = undefined;
+    const copy_size = try decode.decode_fit(copy, &white, 100, 100, 0);
+    try testing.expectEqual(@as(u32, 4), copy_size.width);
+    try testing.expect(std.mem.allEqual(u8, &white, 0xff));
+    save_mod.save_to(f.state, "/nonexistent directory/x.png");
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Cannot save the frame"));
 }

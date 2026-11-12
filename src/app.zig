@@ -18,6 +18,7 @@ const recent_mod = @import("recent.zig");
 const animation = @import("animation.zig");
 const playback = @import("playback.zig");
 const pages = @import("pages.zig");
+const png_save = @import("png_save.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -60,7 +61,7 @@ pub const Source = union(enum) {
 pub const State = struct {
     settings: settings_mod.Settings = .{},
     io: std.Io,
-    gpa: std.mem.Allocator, // only for nanoui.dialog.open's result
+    gpa: std.mem.Allocator, // only for nanoui's open and save panels' answers
     file_buffer: []u8, // file_size_max bytes, allocated once in main
     current_pixels: []u8, // current_pixels_max bytes, allocated once at startup
     source: Source = .none,
@@ -107,6 +108,7 @@ pub const State = struct {
     player: animation.Player = .{},
     page: u32 = 0, // of a multi-page file; nonzero pages decode into `current_pixels`
     page_count: u32 = 1,
+    png: png_save.Encoder = undefined, // save frame as PNG
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.

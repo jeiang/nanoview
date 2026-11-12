@@ -39,6 +39,7 @@ pub const Action = enum {
     faster,
     next_page,
     previous_page,
+    save_frame,
 };
 
 pub const Binding = struct { shortcut: ui.Shortcut, action: Action };
@@ -88,6 +89,7 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = ']' }, .action = .faster },
     .{ .shortcut = .{ .key = key.down, .alt = true }, .action = .next_page },
     .{ .shortcut = .{ .key = key.up, .alt = true }, .action = .previous_page },
+    .{ .shortcut = .{ .key = 's', .cmd = true, .shift = true }, .action = .save_frame },
 };
 
 pub fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
