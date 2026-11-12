@@ -479,8 +479,15 @@ pub const Surface = struct {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
-                const notches: f32 = @as(f32, @floatFromInt(@as(i16, @truncate(@as(isize, @bitCast(wp)) >> 16)))) / 120;
-                const delta = notches * 48;
+                const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
+                if (wp & 0x0008 != 0) {
+                    // Windows synthesizes Ctrl+wheel for touchpad pinch.
+                    self.ctx.input.zoom *= @exp(@as(f32, @floatFromInt(raw)) / 600);
+                    pace_side.onInput(self);
+                    return 0;
+                }
+                self.ctx.input.precise = preciseWheel(raw);
+                const delta = @as(f32, @floatFromInt(raw)) * 0.4;
                 // Turns between two refreshes are one frame: a scroll box's
                 // offset moves at once, a view's wheel adds up until built.
                 if (self.ctx.applyScroll(delta)) {
@@ -497,8 +504,10 @@ pub const Surface = struct {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
-                const notches: f32 = @as(f32, @floatFromInt(@as(i16, @truncate(@as(isize, @bitCast(wp)) >> 16)))) / 120;
-                self.ctx.input.scroll.x += notches * 48;
+                const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
+                self.ctx.input.precise = preciseWheel(raw);
+                // Match the finger/content direction of vertical scrolling.
+                self.ctx.input.scroll.x -= @as(f32, @floatFromInt(raw)) * 0.4;
                 pace_side.onInput(self);
             },
             w.WM_KEYDOWN, w.WM_SYSKEYDOWN => {
@@ -529,6 +538,18 @@ pub const Surface = struct {
         return 0;
     }
 };
+
+fn preciseWheel(delta: i16) bool {
+    return @rem(delta, 120) != 0;
+}
+
+test "fractional wheel deltas identify precision scrolling" {
+    try std.testing.expect(preciseWheel(1));
+    try std.testing.expect(preciseWheel(-119));
+    try std.testing.expect(!preciseWheel(120));
+    try std.testing.expect(!preciseWheel(-240));
+    try std.testing.expect(!preciseWheel(0));
+}
 
 /// Whether the environment variable `name` is set to something but "0":
 /// `NANOUI_NO_D3D` (draw with GDI), `NANOUI_ONE_THREAD` (one raster thread),

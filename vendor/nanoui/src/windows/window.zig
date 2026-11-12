@@ -432,18 +432,14 @@ pub const Window = struct {
             self.fullscreen_style = w.GetWindowLongPtrW(h, w.GWL_STYLE);
             const style = self.fullscreen_style & ~@as(isize, w.WS_OVERLAPPEDWINDOW);
             _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, style);
-            if (w.SetWindowPos(h, null, m.whole.left, m.whole.top,
-                m.whole.right - m.whole.left, m.whole.bottom - m.whole.top,
-                w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0020) == 0)
-            {
+            if (w.SetWindowPos(h, null, m.whole.left, m.whole.top, m.whole.right - m.whole.left, m.whole.bottom - m.whole.top, w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0020) == 0) {
                 _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, self.fullscreen_style);
                 return;
             }
         } else {
             _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, self.fullscreen_style);
             if (place.SetWindowPlacement(h, &self.fullscreen_placement) == 0) return;
-            _ = w.SetWindowPos(h, null, 0, 0, 0, 0,
-                w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0001 | 0x0020);
+            _ = w.SetWindowPos(h, null, 0, 0, 0, 0, w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0001 | 0x0020);
         }
         self.full_screen = on;
         self.onFullscreen();
