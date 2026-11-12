@@ -84,6 +84,11 @@ pub fn deliver(s: *Surface, event: objc.Object) void {
             if (!Surface.alive(tok)) return;
             in.shortcut = null;
             if (s.ctx.shortcut_taken) return;
+            if (in.cmd and !in.ctrl and !in.alt and key == 'z' and s.ctx.focused_text != null) {
+                const action = if (in.shift) "redo:" else "undo:";
+                objc.msg(void, s.nsview, action, .{@as(?objc.Object, null)});
+                return;
+            }
             if (in.cmd and !in.ctrl and !in.alt and !in.shift) switch (key) {
                 'c' => return textinput.copy(s),
                 'x' => return textinput.cut(s),
