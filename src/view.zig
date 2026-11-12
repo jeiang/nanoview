@@ -25,6 +25,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     });
     c.wants_wheel = true;
     c.wants_moves = c.input.down;
+    menus.run_menu_bar(s, c);
     menus.context_request(s, c);
     keys(s, c);
     slideshow(s, c);

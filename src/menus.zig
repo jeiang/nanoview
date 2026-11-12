@@ -77,6 +77,7 @@ const context_row_height: f32 = 24;
 const Sub = enum(u8) { recent, view, go };
 const sub_count = std.enums.values(Sub).len;
 
+pub const Pending = @typeInfo(Entry).@"union".tag_type.?;
 const Entry = union(enum) { none, action: Action, recent: u32, clear_recent, submenu: Sub };
 
 /// Menu items and what each one does.
@@ -219,4 +220,168 @@ fn open_recent(s: *State, i: u32) void {
     assert(path.len <= paths.path_max);
     @memcpy(buf[0..path.len], path);
     s.open_path(buf[0..path.len]);
+}
+
+const group_count: u32 = std.enums.values(actions.Group).len;
+/// A group's actions, a separator before each, and Open Recent.
+const group_len_max: u32 = action_count * 2 + 1;
+/// The window menu and the app menu, beside the groups.
+const bar_len_max: u32 = group_count + 2;
+/// "Ctrl+Alt+Shift+Cmd+" and a key of at most four bytes, or "Plus".
+const accelerator_len_max: u32 = 32;
+const recent_ids = ids: {
+    var ids: [recent_mod.recent_max][]const u8 = undefined;
+    for (&ids, 0..) |*id, i| id.* = std.fmt.comptimePrint("recent{d}", .{i});
+    break :ids ids;
+};
+
+/// The macOS menu bar's template: AppKit copies it, but the items' ids
+/// and the Open Recent items stay here. Its menus show the keys of
+/// `s.keymap` but leave them to `view.keys`, so each runs its action
+/// once; a click is queued in `pending` for the next frame, which has
+/// the context `view.perform` needs.
+pub const MenuBar = struct {
+    bar: [bar_len_max]nanoui.MenuItem = undefined,
+    groups: [group_count][group_len_max]nanoui.MenuItem = undefined,
+    recent: [recent_mod.recent_max + 1]nanoui.MenuItem = undefined,
+    accelerators: [action_count][accelerator_len_max]u8 = undefined,
+    pending: Entry = .none,
+};
+
+/// The menu bar's template, built in `s.menu_bar` from `actions.infos`
+/// and the key table. For `nanoui.App.setMenu`, once, on macOS.
+pub fn menu_bar(s: *State) []const nanoui.MenuItem {
+    const b = &s.menu_bar;
+    var len: u32 = 0;
+    b.bar[len] = .{ .role = .app_menu };
+    len += 1;
+    for (std.enums.values(actions.Group), 0..) |group, g| {
+        const items = bar_group(s, group, &b.groups[g]);
+        b.bar[len] = .{
+            .label = group.title(),
+            .id = @tagName(group),
+            .submenu = items,
+            .on_open = .of(s, refresh_group),
+            .accelerators_shown_only = true,
+        };
+        len += 1;
+    }
+    b.bar[len] = .{ .role = .window_menu };
+    len += 1;
+    assert(len == bar_len_max);
+    return b.bar[0..len];
+}
+
+/// Every action of the group, with its first key; Open Recent after Open.
+fn bar_group(
+    s: *State,
+    group: actions.Group,
+    items: *[group_len_max]nanoui.MenuItem,
+) []const nanoui.MenuItem {
+    var len: u32 = 0;
+    for (std.enums.values(Action)) |a| {
+        const info = actions.infos.get(a);
+        if (info.group != group) continue;
+        if (info.section and len > 0) {
+            items[len] = .separator;
+            len += 1;
+        }
+        const buf = &s.menu_bar.accelerators[@backingInt(a)];
+        items[len] = .{
+            .label = info.title,
+            .id = @tagName(a),
+            .accelerator = if (s.keymap.first_key(a)) |sc| accelerator(sc, buf) else "",
+            .kind = if (checked(s, a) == null) .normal else .checkbox,
+            .click = .of(s, clicked),
+        };
+        len += 1;
+        if (a == .open) {
+            const none = s.menu_bar.recent[0..0];
+            const on_open: nanoui.MenuClick = .of(s, refresh_recent);
+            items[len] = .{ .label = "Open Recent", .submenu = none, .on_open = on_open };
+            len += 1;
+        }
+    }
+    assert(len <= group_len_max);
+    return items[0..len];
+}
+
+/// A key as nanoui's accelerators name it: "Shift+Cmd+c", "Plus".
+fn accelerator(sc: ui.Shortcut, buf: *[accelerator_len_max]u8) []const u8 {
+    assert(sc.key != 0);
+    var w: std.Io.Writer = .fixed(buf);
+    const n = sc.native();
+    const mods = [_]struct { bool, []const u8 }{
+        .{ n.ctrl, "Ctrl+" }, .{ n.alt, "Alt+" }, .{ n.shift, "Shift+" }, .{ n.cmd, "Cmd+" },
+    };
+    for (mods) |m| if (m[0]) w.writeAll(m[1]) catch unreachable;
+    if (n.key == '+') {
+        w.writeAll("Plus") catch unreachable;
+    } else {
+        w.print("{u}", .{n.key}) catch unreachable;
+    }
+    assert(w.end > 0);
+    return w.buffered();
+}
+
+/// A group's menu is about to show: its checks and what applies now.
+fn refresh_group(s: *State, holder: *nanoui.menu.Item) void {
+    const group = std.meta.stringToEnum(actions.Group, holder.id) orelse unreachable;
+    for (std.enums.values(Action)) |a| {
+        if (actions.infos.get(a).group != group) continue;
+        const item = holder.menu.item(@tagName(a)) orelse continue;
+        item.setEnabled(available(s, a));
+        if (checked(s, a)) |on| item.setChecked(on);
+    }
+}
+
+/// Open Recent is about to show: the recent files, then Clear Recent.
+fn refresh_recent(s: *State, holder: *nanoui.menu.Item) void {
+    const items = &s.menu_bar.recent;
+    const count = @min(s.recent_count(), recent_mod.recent_max);
+    var len: u32 = 0;
+    for (0..count) |i| {
+        const path = s.recent(@intCast(i)) orelse break;
+        const label = std.fs.path.basename(path);
+        items[len] = .{ .label = label, .id = recent_ids[i], .click = .of(s, clicked) };
+        len += 1;
+    }
+    items[len] = .{
+        .label = "Clear Recent",
+        .id = "clear_recent",
+        .disabled = len == 0,
+        .click = .of(s, clicked),
+    };
+    len += 1;
+    assert(len <= items.len);
+    holder.setSubmenu(items[0..len]) catch |err| {
+        s.notify("Open Recent: {s}", .{@errorName(err)});
+    };
+}
+
+/// A menu bar click: run on the next frame, which has a context.
+fn clicked(s: *State, item: *nanoui.menu.Item) void {
+    assert(item.id.len > 0);
+    s.menu_bar.pending = if (std.meta.stringToEnum(Action, item.id)) |a|
+        .{ .action = a }
+    else if (std.mem.eql(u8, item.id, "clear_recent"))
+        .clear_recent
+    else for (recent_ids, 0..) |id, i| {
+        if (std.mem.eql(u8, id, item.id)) break .{ .recent = @intCast(i) };
+    } else unreachable;
+    if (s.window) |w| w.redraw();
+}
+
+/// Runs the menu bar's queued click. Call before the keys.
+pub fn run_menu_bar(s: *State, c: *ui.Context) void {
+    const entry = s.menu_bar.pending;
+    s.menu_bar.pending = .none;
+    switch (entry) {
+        .none => {},
+        .action => |a| if (available(s, a)) view.perform(s, c, a),
+        .recent => |i| open_recent(s, i),
+        .clear_recent => s.clear_recent(),
+        .submenu => unreachable,
+    }
+    assert(s.menu_bar.pending == .none);
 }

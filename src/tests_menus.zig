@@ -1,7 +1,9 @@
 //! Menus through the Tester: which actions apply, their check marks.
 const std = @import("std");
 const builtin = @import("builtin");
-const ui = @import("nanoui").ui;
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+const objc = nanoui.objc;
 const keymap = @import("keymap.zig");
 const paths = @import("paths.zig");
 const menus = @import("menus.zig");
@@ -167,4 +169,49 @@ test "keys and drags stay off the picture while the context menu is open" {
     // With the menu closed, the same drag does.
     f.tester.drag(20, 340, 120, 300);
     try testing.expect(f.state.viewport.x != x);
+}
+
+/// A key press as AppKit offers it to the menu bar first.
+fn key_event(flags: usize, chars: []const u8) objc.Object {
+    const key_down: usize = 10;
+    const fmt = "keyEventWithType:location:modifierFlags:timestamp:windowNumber:" ++
+        "context:characters:charactersIgnoringModifiers:isARepeat:keyCode:";
+    return objc.msg(objc.Object, objc.class("NSEvent"), fmt, .{
+        key_down,             objc.CGPoint{},         flags,
+        @as(f64, 0),          @as(objc.NSInteger, 0), @as(?objc.Object, null),
+        objc.nsString(chars), objc.nsString(chars),   objc.NO,
+        @as(u16, 0),
+    });
+}
+
+test "the menu bar shows the keys but leaves them to the view, so each runs once" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("a.png");
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const bar = try nanoui.Menu.create(testing.allocator, "nanoview", menus.menu_bar(f.state));
+    defer bar.destroy();
+    const copy = bar.item("copy_image").?;
+    const shown = objc.msg(?objc.Object, copy.ns, "keyEquivalent", .{});
+    try testing.expectEqualStrings("c", objc.fromNSString(shown));
+    // ⌘C and a bare r: the menu bar takes neither.
+    const cmd: usize = 1 << 20;
+    const perform = "performKeyEquivalent:";
+    try testing.expect(objc.msg(objc.BOOL, bar.ns, perform, .{key_event(cmd, "c")}) == objc.NO);
+    try testing.expect(objc.msg(objc.BOOL, bar.ns, perform, .{key_event(0, "r")}) == objc.NO);
+    try testing.expectEqual(menus.Pending.none, std.meta.activeTag(f.state.menu_bar.pending));
+    // The view runs r once: a quarter turn.
+    _ = f.tester.shortcut(.{ .key = 'r' });
+    f.tester.frame();
+    try testing.expectEqual(@as(u2, 1), f.state.turns_user);
+    // A click runs its action once, on the next frame.
+    const next = bar.item("next").?;
+    next.click.?.func(next.click.?.ctx, next);
+    f.tester.frame();
+    f.tester.frame();
+    try testing.expectEqualStrings("b.png", f.state.basename());
 }

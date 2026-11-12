@@ -137,6 +137,7 @@ pub const State = struct {
     trashed: fileops.TrashStack = .{},
     clipboard: Clipboard = .{},
     context_menu: @import("menus.zig").ContextMenu = .{},
+    menu_bar: @import("menus.zig").MenuBar = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
