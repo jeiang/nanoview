@@ -170,6 +170,8 @@ pub extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;
 pub extern "user32" fn EmptyClipboard() callconv(.winapi) BOOL;
 pub extern "user32" fn SetClipboardData(format: u32, mem: ?*anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "user32" fn GetClipboardData(format: u32) callconv(.winapi) ?*anyopaque;
+pub extern "user32" fn RegisterClipboardFormatW(name: [*:0]const u16) callconv(.winapi) u32;
+pub extern "kernel32" fn GlobalSize(mem: *anyopaque) callconv(.winapi) usize;
 pub extern "gdi32" fn SetDIBitsToDevice(hdc: HDC, x: i32, y: i32, w: u32, h: u32, sx: i32, sy: i32, start: u32, lines: u32, bits: *const anyopaque, info: *const BITMAPINFOHEADER, usage: u32) callconv(.winapi) i32;
 pub extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
 pub extern "kernel32" fn GetCurrentThreadId() callconv(.winapi) u32;

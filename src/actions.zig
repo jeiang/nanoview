@@ -31,8 +31,12 @@ pub const Action = enum {
     info,
     trash,
     confirm_trash,
+    restore,
     reveal,
     copy_path,
+    copy_image,
+    paste,
+    rename,
 };
 
 pub const Binding = struct { shortcut: ui.Shortcut, action: Action };
@@ -74,8 +78,12 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = key.forward_delete }, .action = .trash },
     .{ .shortcut = .{ .key = key.backspace, .cmd = true }, .action = .trash },
     .{ .shortcut = .{ .key = key.enter }, .action = .confirm_trash },
+    .{ .shortcut = .{ .key = 'z', .cmd = true }, .action = .restore },
     .{ .shortcut = .{ .key = 'r', .cmd = true }, .action = .reveal },
     .{ .shortcut = .{ .key = 'c', .cmd = true, .shift = true }, .action = .copy_path },
+    .{ .shortcut = .{ .key = 'c', .cmd = true }, .action = .copy_image },
+    .{ .shortcut = .{ .key = 'v', .cmd = true }, .action = .paste },
+    .{ .shortcut = .{ .key = key.f(2) }, .action = .rename },
 };
 
 pub fn same(a: ui.Shortcut, b: ui.Shortcut) bool {

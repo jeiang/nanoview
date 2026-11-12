@@ -29,9 +29,23 @@ pub const TextBuffer = struct {
     last_id: u64 = 0,
     /// Asked to take the keyboard (`focus`): its field does, next frame.
     want_focus: bool = false,
+    /// The bytes are the app's (`initFixed`): never grown or freed, and an
+    /// edit that would not fit is refused, as one is when memory runs out.
+    fixed: bool = false,
     const gpa = std.heap.c_allocator;
 
+    /// A buffer over the app's own storage, for an app that does not
+    /// allocate after startup: a file name's field.
+    pub fn initFixed(storage: []u8) TextBuffer {
+        return .{ .buf = .initBuffer(storage), .fixed = true };
+    }
+
     pub fn deinit(b: *TextBuffer) void {
+        if (b.fixed) {
+            b.buf.clearRetainingCapacity();
+            b.* = .{ .buf = b.buf, .fixed = true };
+            return;
+        }
         b.buf.deinit(gpa);
         b.* = .{};
     }
@@ -74,6 +88,7 @@ pub const TextBuffer = struct {
     /// Replaces bytes [from, to) with `s`; returns the bytes inserted:
     /// all of them, or none (and nothing changes) when memory runs out.
     pub fn replace(b: *TextBuffer, from: usize, to: usize, s: []const u8) usize {
+        if (b.fixed and b.buf.items.len - (to - from) + s.len > b.buf.capacity) return 0;
         b.buf.replaceRange(gpa, from, to - from, s) catch return 0;
         return s.len;
     }

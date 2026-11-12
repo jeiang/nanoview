@@ -21,6 +21,50 @@ pub const clipboard = struct {
         _ = objc.msg(objc.BOOL, pb, "setString:forType:", .{ objc.nsString(text), objc.nsString("public.utf8-plain-text") });
     }
 
+    /// Puts a picture on the clipboard as PNG and TIFF: `bgra` is `width`
+    /// by `height` premultiplied BGRA pixels, in sRGB. With `file`, the
+    /// file it came from goes along, so a paste in Finder copies the file.
+    /// False when it could not.
+    pub fn writeImage(bgra: []const u8, width: u32, height: u32, file: ?[]const u8) bool {
+        const n = @as(usize, width) * height;
+        if (n == 0 or bgra.len != n * 4) return false;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const plain = objc.msg(?objc.Object, objc.alloc("NSBitmapImageRep"), "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bitmapFormat:bytesPerRow:bitsPerPixel:", .{
+            @as(?*anyopaque, null),          @as(objc.NSInteger, width),         @as(objc.NSInteger, height),
+            @as(objc.NSInteger, 8),          @as(objc.NSInteger, 4),             objc.YES,
+            objc.NO,                         objc.nsString("NSDeviceRGBColorSpace"), @as(objc.NSUInteger, 0),
+            @as(objc.NSInteger, width) * 4, @as(objc.NSInteger, 32),
+        }) orelse return false;
+        defer objc.release(plain);
+        // Premultiplied RGBA is the representation's own format (no
+        // NSBitmapFormatAlphaNonpremultiplied): only the channels swap.
+        const rgba = objc.msg([*]u8, plain, "bitmapData", .{})[0 .. n * 4];
+        for (0..n) |i| {
+            const p = bgra[i * 4 ..][0..4];
+            rgba[i * 4 ..][0..4].* = .{ p[2], p[1], p[0], p[3] };
+        }
+        const srgb = objc.msg(objc.Object, objc.class("NSColorSpace"), "sRGBColorSpace", .{});
+        const rep = objc.msg(?objc.Object, plain, "bitmapImageRepByRetaggingWithColorSpace:", .{srgb}) orelse plain;
+        const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
+        // NSBitmapImageFileTypePNG
+        const png = objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), props }) orelse return false;
+        const tiff = objc.msg(?objc.Object, rep, "TIFFRepresentation", .{}) orelse return false;
+        const item = objc.msg(objc.Object, objc.alloc("NSPasteboardItem"), "init", .{});
+        defer objc.release(item);
+        _ = objc.msg(objc.BOOL, item, "setData:forType:", .{ png, objc.nsString("public.png") });
+        _ = objc.msg(objc.BOOL, item, "setData:forType:", .{ tiff, objc.nsString("public.tiff") });
+        if (file) |f| {
+            const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(f)});
+            const text = objc.msg(objc.Object, url, "absoluteString", .{});
+            _ = objc.msg(objc.BOOL, item, "setString:forType:", .{ text, objc.nsString("public.file-url") });
+        }
+        const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
+        _ = objc.msg(objc.NSInteger, pb, "clearContents", .{});
+        const items = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{item});
+        return objc.msg(objc.BOOL, pb, "writeObjects:", .{items});
+    }
+
     /// The image on the clipboard (a screenshot, an image copied from a
     /// page or an app) as PNG, or null when it holds none. Caller frees it.
     pub fn readImage(gpa: std.mem.Allocator) !?[]u8 {
@@ -103,11 +147,27 @@ pub const shell = struct {
 
     /// Moves the file at `path` to the Trash.
     pub fn trash(file: []const u8) bool {
+        var none: [0]u8 = .{};
+        return trashTo(file, &none) != null;
+    }
+
+    /// Moves the file at `path` to the Trash and writes the path it now
+    /// has there to `out`, for moving it back: null when it did not move,
+    /// empty when it moved but the system did not say where, or the path
+    /// is longer than `out`.
+    pub fn trashTo(file: []const u8, out: []u8) ?[]u8 {
         const pool = objc.Pool.push();
         defer pool.pop();
         const u = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(file)});
         const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
-        return objc.msg(objc.BOOL, fm, "trashItemAtURL:resultingItemURL:error:", .{ u, @as(?*anyopaque, null), @as(?*anyopaque, null) });
+        // Autoreleased, so it lives until the pool pops.
+        var result: ?objc.Object = null;
+        if (!objc.msg(objc.BOOL, fm, "trashItemAtURL:resultingItemURL:error:", .{ u, &result, @as(?*anyopaque, null) })) return null;
+        const url = result orelse return out[0..0];
+        const p = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
+        if (p.len > out.len) return out[0..0];
+        @memcpy(out[0..p.len], p);
+        return out[0..p.len];
     }
 
     /// Plays the system's alert sound.

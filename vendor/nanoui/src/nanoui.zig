@@ -232,6 +232,8 @@ test {
             // File drops: path/URL conversion and one HDROP as one event.
             _ = @import("windows/drop_files.zig");
             _ = @import("windows/tests_drop_files.zig");
+            // Clipboard pictures: the DIB layout.
+            _ = @import("windows/dib.zig");
             // The input method: its own tests, and the file itself for the
             // decode/mapping units.
             _ = @import("windows/ime.zig");

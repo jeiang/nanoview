@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ui = @import("nanoui").ui;
 const app = @import("app.zig");
 const view = @import("view.zig");
@@ -25,8 +26,37 @@ test {
     _ = @import("webp.zig");
     _ = @import("wuffs.zig");
     _ = @import("decode_windows.zig");
+    _ = @import("fileops.zig");
 }
 
+/// What the stand-in clipboard holds: tests never read the real one.
+const Pasted = struct {
+    files: ?[]const []const u8 = null,
+    text: ?[]const u8 = null,
+    image: ?[]const u8 = null,
+};
+var pasted: Pasted = .{};
+
+const fake_clipboard: app.Clipboard = .{
+    .read_files = fake_files,
+    .read_text = fake_text,
+    .read_image = fake_image,
+};
+
+fn fake_files(gpa: std.mem.Allocator) anyerror!?[][]u8 {
+    const files = pasted.files orelse return null;
+    const out = try gpa.alloc([]u8, files.len);
+    for (files, out) |file, *o| o.* = try gpa.dupe(u8, file);
+    return out;
+}
+
+fn fake_text(gpa: std.mem.Allocator) anyerror!?[]u8 {
+    return try gpa.dupe(u8, pasted.text orelse return null);
+}
+
+fn fake_image(gpa: std.mem.Allocator) anyerror!?[]u8 {
+    return try gpa.dupe(u8, pasted.image orelse return null);
+}
 /// A State and a Tester over it, on the heap: State is too large for the
 /// stack. The large buffers stay untouched until used.
 const Fixture = struct {
@@ -55,6 +85,8 @@ const Fixture = struct {
         };
         const pixels = f.current_pixels;
         state.init(testing.io, testing.allocator, f.file_buffer, f.pool, f.scratch, pixels);
+        state.clipboard = fake_clipboard;
+        pasted = .{};
         f.dir_len = try f.tmp.dir.realPathFile(testing.io, ".", &f.dir_buf);
         try f.tester.init(testing.allocator, .init(state, view.view), .{
             .width = 480,
@@ -689,4 +721,188 @@ test "opening a picture records it in the recent file" {
     f.state.settings.recent = false;
     try f.open("a.png");
     try testing.expectEqual(@as(u32, 0), f.state.recent_count());
+}
+
+fn expect_file(f: *Fixture, name: []const u8, data: ?[]const u8) !void {
+    var buf: [64]u8 = undefined;
+    const read = f.tmp.dir.readFile(testing.io, name, &buf);
+    if (data) |d| try testing.expectEqualStrings(d, try read) else {
+        try testing.expectError(error.FileNotFound, read);
+    }
+}
+
+/// F2, then the whole name replaced by `name`, then Enter.
+fn rename_to(f: *Fixture, name: []const u8) void {
+    if (!f.state.rename_open) _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    f.tester.textOps(&.{.{ .command = .select_all }});
+    if (name.len == 0) f.tester.textOps(&.{.{ .command = .delete_backward }});
+    f.tester.typeText(name);
+    f.tester.key(.enter);
+}
+
+test "F2 renames the file on disk and sorts it into place" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "c.png", "d.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    try testing.expect(f.state.rename_open);
+    // The stem is selected: typing replaces it and keeps the extension.
+    f.tester.typeText("e");
+    try testing.expectEqualStrings("e.png", f.state.rename_buffer.text());
+    f.tester.key(.enter);
+    try testing.expect(!f.state.rename_open);
+    try expect_file(f, "a.png", null);
+    try testing.expectEqualStrings("e.png", f.state.basename());
+    try testing.expectEqual(@as(?u32, 2), f.state.index);
+    try testing.expectEqualStrings("c.png", f.state.folder.name(0));
+    try testing.expectEqualStrings("e.png", f.state.folder.name(2));
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    try testing.expect(f.tester.containsText("Renamed a.png to e.png"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("c.png", f.state.basename());
+}
+
+test "a bad new name says why and leaves the file and the field" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.png", .data = "picture" });
+    try f.open("a.png");
+    const long: [300]u8 = @splat('x');
+    const cases = [_][2][]const u8{
+        .{ "", "The name is empty" },
+        .{ "b/c.png", "A name cannot contain a slash" },
+        .{ "..", "A name cannot be . or .." },
+        .{ &long, "The name is too long" },
+    };
+    for (cases) |case| {
+        rename_to(f, case[0]);
+        try testing.expect(f.tester.containsText(case[1]));
+        try testing.expect(f.state.rename_open);
+        try expect_file(f, "a.png", "picture");
+    }
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "rename refuses to replace another file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.png", .data = "first" });
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "b.png", .data = "second" });
+    try f.open("a.png");
+    rename_to(f, "b.png");
+    try testing.expect(f.tester.containsText("b.png already exists"));
+    try expect_file(f, "a.png", "first");
+    try expect_file(f, "b.png", "second");
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "Escape closes the rename field and keeps the name" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    f.tester.typeText("zzz");
+    f.tester.key(.escape);
+    try testing.expect(!f.state.rename_open);
+    try expect_file(f, "zzz.png", null);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "keys typed into the rename field run no actions" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 20, 10);
+    try f.write_png("b.png", 20, 10);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    try testing.expect(!f.tester.shortcut(.{ .key = 'r' }));
+    try testing.expect(!f.tester.shortcut(.{ .key = ui.Shortcut.right }));
+    f.tester.typeText("r");
+    f.tester.key(.right);
+    try testing.expectEqualStrings("r.png", f.state.rename_buffer.text());
+    try testing.expectEqual(@as(u2, 0), f.state.turns_user);
+    try testing.expectEqual(@as(f32, 20), f.state.viewport.image_w);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expect(f.state.rename_open);
+}
+
+test "cmd+z restores the newest trashed file and shows it, then has nothing left" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    const restore: ui.Shortcut = .{ .key = 'z', .cmd = true };
+    if (builtin.os.tag == .windows) {
+        _ = f.tester.shortcut(restore);
+        return testing.expect(f.tester.containsText("Restore is not available on Windows"));
+    }
+    // A stand-in for the Trash, so the test never touches the real one.
+    try f.tmp.dir.createDirPath(testing.io, "files");
+    try f.write_png("files/b.png", 6, 4);
+    var location_buf: [paths.path_max]u8 = undefined;
+    var original_buf: [paths.path_max]u8 = undefined;
+    const dir = f.dir_buf[0..f.dir_len];
+    f.state.trashed.push(
+        paths.join(dir, "b.png", &original_buf).?,
+        paths.join(dir, "files/b.png", &location_buf).?,
+    );
+    _ = f.tester.shortcut(restore);
+    try testing.expect(f.tester.containsText("Restored b.png"));
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    try testing.expectEqual(@as(f32, 6), f.state.viewport.image_w);
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    _ = f.tester.shortcut(restore);
+    try testing.expect(f.tester.containsText("Nothing to restore"));
+}
+
+test "cmd+v opens pasted file paths and file URLs like a drop" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png" }) |n| try f.write_png(n, 4, 4);
+    var buf: [paths.path_max]u8 = undefined;
+    const b = paths.join(f.dir_buf[0..f.dir_len], "b.png", &buf).?;
+    var text_buf: [paths.path_max + 16]u8 = undefined;
+    pasted.text = try std.fmt.bufPrint(&text_buf, "file://{s}\n", .{b});
+    _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    pasted = .{ .files = &.{paths.join(f.dir_buf[0..f.dir_len], "a.png", &buf).?} };
+    _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "a pasted picture shows as Clipboard, steps nowhere, and is not a file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("a.png");
+    const pixels = try testing.allocator.alloc(u8, 6 * 4 * 4);
+    defer testing.allocator.free(pixels);
+    @memset(pixels, 0x80);
+    const png = try ui.png.encode(testing.allocator, .{ .bytes = pixels, .width = 6, .height = 4 });
+    defer testing.allocator.free(png);
+    pasted = .{ .text = "just words", .image = png };
+    _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
+    f.tester.frame();
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    try testing.expectEqualStrings("Clipboard", f.state.basename());
+    try testing.expectEqual(@as(f32, 6), f.state.viewport.image_w);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("Clipboard", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.forward_delete });
+    try testing.expect(f.tester.containsText("This picture is not a file"));
+    f.tester.advance(5);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    try testing.expect(f.tester.containsText("This picture is not a file"));
+    try testing.expect(!f.state.rename_open);
+}
+
+test "pasting with no picture on the clipboard says so" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
+    try testing.expect(f.tester.containsText("The clipboard holds no picture"));
+    try testing.expectEqual(app.Status.empty, f.state.status);
 }
