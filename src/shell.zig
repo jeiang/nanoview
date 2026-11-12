@@ -11,10 +11,12 @@ pub const Date = struct { year: u32, month: u32, day: u32, hour: u32, minute: u3
 
 test {
     if (builtin.os.tag == .linux) _ = @import("shell_linux.zig");
+    _ = @import("shell_windows.zig");
 }
 
 /// Returns where the file went in the Trash, for `restore`: empty when the
-/// system does not say (Windows), null when the file did not move.
+/// system does not say (Windows, where Restore finds it by its path), null
+/// when the file did not move.
 pub fn trash(io: std.Io, path: []const u8, out: *[paths.path_max]u8) ?[]const u8 {
     assert(path.len > 0);
     return switch (builtin.os.tag) {
@@ -24,7 +26,7 @@ pub fn trash(io: std.Io, path: []const u8, out: *[paths.path_max]u8) ?[]const u8
     };
 }
 
-pub const RestoreError = error{ Unavailable, Exists, Gone, NoFolder, Failed };
+pub const RestoreError = error{ Exists, Gone, NoFolder, Failed };
 
 /// Moves the file `trash` put at `location` back to `original`, never over
 /// a file that took its place since. `Gone` also when the file now at
@@ -37,8 +39,12 @@ pub fn restore(
     identity: fileops.Identity,
 ) RestoreError!void {
     assert(original.len > 0);
-    // The Recycle Bin's own undelete is not a documented interface.
-    if (builtin.os.tag == .windows) return error.Unavailable;
+    if (builtin.os.tag == .windows) {
+        // The Recycle Bin would ask before replacing a file; nanoview never
+        // replaces one. It makes a missing folder again, so no `NoFolder`.
+        if (std.Io.Dir.cwd().access(io, original, .{})) |_| return error.Exists else |_| {}
+        return @import("shell_windows.zig").restore(original);
+    }
     assert(location.len > 0);
     const now = fileops.node(location) orelse return error.Gone;
     if (!std.meta.eql(now.identity, identity)) return error.Gone;

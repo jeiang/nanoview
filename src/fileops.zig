@@ -180,8 +180,9 @@ pub fn node(path: []const u8) ?Node {
     };
 }
 
-/// One move to the Trash: the file's path, where the Trash put it, and
-/// which file it was, so Restore never brings back another one.
+/// One move to the Trash: the file's path, where the Trash put it (empty
+/// on Windows, which does not say), and which file it was, so Restore
+/// never brings back another one.
 pub const Trashed = struct {
     original_buf: [paths.path_max]u8 = undefined,
     original_len: u32 = 0,
@@ -195,7 +196,8 @@ pub const Trashed = struct {
     }
 
     pub fn location(t: *const Trashed) []const u8 {
-        assert(t.location_len > 0 and t.location_len <= paths.path_max);
+        assert(t.location_len <= paths.path_max);
+        assert(t.location_len > 0 or builtin.os.tag == .windows);
         return t.location_buf[0..t.location_len];
     }
 };
@@ -212,7 +214,8 @@ pub const TrashStack = struct {
         identity: Identity,
     ) void {
         assert(original.len > 0 and original.len <= paths.path_max);
-        assert(location.len > 0 and location.len <= paths.path_max);
+        assert(location.len <= paths.path_max);
+        assert(location.len > 0 or builtin.os.tag == .windows);
         if (t.count == trash_undo_max) {
             std.mem.copyForwards(Trashed, t.items[0 .. t.count - 1], t.items[1..t.count]);
             t.count -= 1;

@@ -594,8 +594,12 @@ pub const State = struct {
         };
         // Restore needs the same file at `location`: a move keeps device
         // and inode, so a copy (or nothing to compare) cannot be restored.
+        // Windows names no location; Restore asks the Recycle Bin for the
+        // newest item that was this path.
         const after = if (location.len > 0) fileops.node(location) else null;
-        if (before != null and after != null and
+        if (builtin.os.tag == .windows) {
+            s.trashed.push(s.path(), location, .{ .device = 0, .inode = 0 });
+        } else if (before != null and after != null and
             std.meta.eql(before.?.identity, after.?.identity))
             s.trashed.push(s.path(), location, before.?.identity);
         if (s.index) |i| {
@@ -623,9 +627,6 @@ pub const State = struct {
 
     /// Moves the newest file this run put in the Trash back, and shows it.
     pub fn restore(s: *State) void {
-        if (builtin.os.tag == .windows) {
-            return s.notify("Restore is not available on Windows", .{});
-        }
         const item = s.trashed.top() orelse return s.notify("Nothing to restore", .{});
         const name = std.fs.path.basename(item.original());
         // A failure keeps the entry, so Restore works once the cause is
@@ -638,7 +639,7 @@ pub const State = struct {
                 s.notify("{s} is no longer in the Trash", .{name});
                 s.trashed.pop();
             },
-            error.Unavailable, error.Failed => s.notify("Could not restore {s}", .{name}),
+            error.Failed => s.notify("Could not restore {s}", .{name}),
         };
         // The popped entry's bytes stay until the next push.
         s.trashed.pop();

@@ -908,15 +908,13 @@ test "keys typed into the rename field run no actions" {
 }
 
 test "cmd+z restores the newest trashed file and shows it, then has nothing left" {
+    // The Recycle Bin has no stand-in: Restore there asks the real one.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const f = try Fixture.create();
     defer f.destroy();
     try f.write_png("a.png", 4, 4);
     try f.open("a.png");
     const restore: ui.Shortcut = .{ .key = 'z', .cmd = true };
-    if (builtin.os.tag == .windows) {
-        _ = f.tester.shortcut(restore);
-        return testing.expect(f.tester.containsText("Restore is not available on Windows"));
-    }
     // A stand-in for the Trash, so the test never touches the real one.
     try f.tmp.dir.createDirPath(testing.io, "files");
     try f.write_png("files/b.png", 6, 4);
