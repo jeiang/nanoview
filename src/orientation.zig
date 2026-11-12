@@ -1,12 +1,11 @@
 //! EXIF orientation, and the upright size and quarter turns it implies.
 const std = @import("std");
 const builtin = @import("builtin");
+const exif_mod = @import("exif.zig");
+const sniff = @import("sniff.zig");
 const assert = std.debug.assert;
 
 const mac = builtin.os.tag == .macos;
-const segments_max: u32 = 64;
-const ifd_entries_max: u32 = 256;
-const tag_orientation: u16 = 0x0112;
 
 /// Mirrored variants are shown unmirrored.
 pub fn quarter_turns(exif: u8) u2 {
@@ -23,52 +22,11 @@ pub fn quarter_turns(exif: u8) u2 {
 
 /// The EXIF orientation of a JPEG, 1 unless found.
 pub fn jpeg_exif(bytes: []const u8) u8 {
-    if (bytes.len < 4 or bytes[0] != 0xFF or bytes[1] != 0xD8) return 1;
-    var at: usize = 2;
-    var segment: u32 = 0;
-    while (segment < segments_max) : (segment += 1) {
-        if (at + 4 > bytes.len or bytes[at] != 0xFF) return 1;
-        const marker = bytes[at + 1];
-        if (marker == 0xDA or marker == 0xD9) return 1;
-        const len = std.mem.readInt(u16, bytes[at + 2 ..][0..2], .big);
-        if (len < 2 or at + 2 + len > bytes.len) return 1;
-        const payload = bytes[at + 4 .. at + 2 + len];
-        assert(payload.len == len - 2);
-        if (marker == 0xE1 and std.mem.startsWith(u8, payload, "Exif\x00\x00")) {
-            return tiff_orientation(payload[6..]);
-        }
-        at += 2 + len;
-        assert(at <= bytes.len);
-    }
-    return 1;
-}
-
-fn tiff_orientation(tiff: []const u8) u8 {
-    if (tiff.len < 8) return 1;
-    const endian: std.builtin.Endian = if (std.mem.eql(u8, tiff[0..2], "II"))
-        .little
-    else if (std.mem.eql(u8, tiff[0..2], "MM"))
-        .big
-    else
-        return 1;
-    if (std.mem.readInt(u16, tiff[2..4], endian) != 42) return 1;
-    const ifd = std.mem.readInt(u32, tiff[4..8], endian);
-    if (ifd > tiff.len or tiff.len - ifd < 2) return 1;
-    assert(ifd + 2 <= tiff.len);
-    const count = @min(std.mem.readInt(u16, tiff[ifd..][0..2], endian), ifd_entries_max);
-    var i: u32 = 0;
-    while (i < count) : (i += 1) {
-        const entry = ifd + 2 + i * 12;
-        if (entry + 12 > tiff.len) return 1;
-        const tag = std.mem.readInt(u16, tiff[entry..][0..2], endian);
-        const kind = std.mem.readInt(u16, tiff[entry + 2 ..][0..2], endian);
-        if (tag != tag_orientation or kind != 3) continue;
-        const value = std.mem.readInt(u16, tiff[entry + 8 ..][0..2], endian);
-        assert(entry + 12 <= tiff.len);
-        if (value >= 1 and value <= 8) return @intCast(value);
-        return 1;
-    }
-    return 1;
+    if (sniff.detect(bytes) != .jpeg) return 1;
+    const block = exif_mod.locate(.of_bytes(bytes)).exif orelse return 1;
+    const value = exif_mod.walk(block).orientation orelse return 1;
+    assert(value >= 1 and value <= 8);
+    return @intCast(value);
 }
 
 /// macOS asks ImageIO, so HEIC and TIFF work too.

@@ -6,6 +6,7 @@ const std = @import("std");
 const decode = @import("decode.zig");
 const folder_mod = @import("folder.zig");
 const paths = @import("paths.zig");
+const sniff = @import("sniff.zig");
 const assert = std.debug.assert;
 
 pub const back_count: u32 = 5;
@@ -191,7 +192,7 @@ pub const Preload = struct {
         }
         const encoded = paths.read_file(p.io, file_path, p.scratch) catch return false;
         const size = decode.decode_fit(encoded, memory, job.bounds_w, job.bounds_h) catch |err| {
-            const portable = folder_mod.is_baseline_name(std.fs.path.basename(file_path));
+            const portable = if (sniff.detect(encoded)) |f| f.baseline() else false;
             if (err != error.Unavailable and !portable) return false;
             if (encoded.len > memory.len) return false;
             @memcpy(memory[0..encoded.len], encoded);

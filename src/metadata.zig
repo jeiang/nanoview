@@ -1,6 +1,9 @@
 //! File information cached when a picture is loaded, never on a frame.
 const std = @import("std");
 const builtin = @import("builtin");
+const paths = @import("paths.zig");
+const sniff = @import("sniff.zig");
+const assert = std.debug.assert;
 
 const Time = extern struct {
     sec: c_int,
@@ -29,11 +32,8 @@ pub const Metadata = struct {
         else
             localtime(&seconds);
         const tm = date orelse return;
-        const ext = std.fs.path.extension(path);
-        var format: [16]u8 = undefined;
-        const size = @min(ext.len -| 1, format.len);
-        for (format[0..size], ext[@min(ext.len, 1)..][0..size]) |*out, in|
-            out.* = std.ascii.toUpper(in);
+        var format_buf: [format_len_max]u8 = undefined;
+        const format = format_label(io, path, &format_buf);
         const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB" };
         var bytes: f64 = @floatFromInt(st.size);
         var unit: u32 = 0;
@@ -42,7 +42,7 @@ pub const Metadata = struct {
             &m.text,
             "{s} · {d:.1} {s} · {d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}",
             .{
-                format[0..size],          bytes,                  units[unit],
+                format,                   bytes,                  units[unit],
                 unsigned(tm.year + 1900), unsigned(tm.month + 1), unsigned(tm.day),
                 unsigned(tm.hour),        unsigned(tm.min),
             },
@@ -56,6 +56,25 @@ pub const Metadata = struct {
         return m.text[0..m.len];
     }
 };
+
+const format_len_max: u32 = 16;
+
+/// The format the content shows, else the extension in capitals. A raw file or an
+/// MPO keeps its extension: its content is only the TIFF or JPEG it is built on.
+fn format_label(io: std.Io, path: []const u8, buf: *[format_len_max]u8) []const u8 {
+    assert(path.len > 0);
+    const ext = std.fs.path.extension(path);
+    const bare = ext[@min(ext.len, 1)..];
+    var head: [sniff.head_len_max]u8 = undefined;
+    const bytes = paths.read_head(io, path, &head) catch head[0..0];
+    if (sniff.detect(bytes)) |found| {
+        if (!sniff.is_variant(found, bare)) return found.label();
+    }
+    const len = @min(bare.len, buf.len);
+    for (buf[0..len], bare[0..len]) |*out, in| out.* = std.ascii.toUpper(in);
+    assert(len <= format_len_max);
+    return buf[0..len];
+}
 
 fn unsigned(value: c_int) u32 {
     return @intCast(@max(0, value));

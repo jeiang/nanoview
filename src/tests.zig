@@ -29,6 +29,8 @@ test {
     _ = @import("fileops.zig");
     _ = @import("instance.zig");
     if (builtin.os.tag != .windows) _ = @import("instance_posix.zig");
+    _ = @import("sniff.zig");
+    _ = @import("exif.zig");
 }
 
 /// What the stand-in clipboard holds: tests never read the real one.
@@ -183,6 +185,62 @@ test "a file that is not a picture fails visibly" {
     try f.open("notes.txt");
     try testing.expectEqual(app.Status.failed, f.state.status);
     try testing.expect(f.tester.containsText("Cannot show notes.txt"));
+}
+
+test "a PNG named a.dat opens directly, joins the list and says PNG" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.dat", 8, 8);
+    try f.write_png("b.png", 8, 8);
+    try f.open("a.dat");
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    try testing.expectEqual(@as(?u32, 0), f.state.index);
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("PNG ·"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("a.dat", f.state.basename());
+    try testing.expectEqual(app.Status.shown, f.state.status);
+}
+
+test "a JPEG named b.png shows and the info line says JPEG" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const jpeg = @embedFile("testdata/format.jpeg");
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "b.png", .data = jpeg });
+    try f.open("b.png");
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("JPEG ·"));
+    try testing.expect(!f.tester.containsText("PNG ·"));
+}
+
+test "e lists the EXIF details of a camera JPEG and says when a file has none" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const jpeg = @embedFile("testdata/exif.jpeg");
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.jpg", .data = jpeg });
+    try f.write_png("b.png", 8, 8);
+    try f.open("a.jpg");
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    const want = [_][]const u8{
+        "Camera: Canon EOS R5",       "Lens: RF24-70mm F2.8 L IS USM",
+        "Taken: 2024-05-01 12:34:56", "Exposure: 1/250 s",
+        "Aperture: f/2.8",            "ISO: 200",
+        "Focal length: 50.0 mm",      "Flash: fired",
+        "Pixels: 32 × 32",
+        "GPS: 48.858370, 2.294481",   "Software: nanoview test",
+        "Color space: sRGB",
+    };
+    for (want) |line| try testing.expect(f.tester.containsText(line));
+    // The panel follows the next picture, and goes away on a second press.
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expect(f.tester.containsText("No EXIF data"));
+    try testing.expect(!f.tester.containsText("Camera:"));
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    try testing.expect(!f.tester.containsText("No EXIF data"));
 }
 
 test "r turns the view a quarter and i shows the upright size" {

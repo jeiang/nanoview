@@ -10,6 +10,7 @@ const preload = @import("preload.zig");
 const actions = @import("actions.zig");
 const keymap = @import("keymap.zig");
 const settings_mod = @import("settings.zig");
+const exif = @import("exif.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -73,6 +74,7 @@ fn body(s: *State, c: *ui.Context) void {
     if (s.source == .pixels and !s.promote_failed and needs_promote(s, c)) s.promote();
     draw(s, c, s.picture_key(&key_buf));
     if (s.info_shown) info(s, c);
+    if (s.details_shown) details(s, c);
 }
 
 const message_seconds: f64 = 4;
@@ -328,6 +330,42 @@ fn info(s: *State, c: *ui.Context) void {
     ui.text(c, s.metadata.line(), .{ .size = info_text_size, .color = ui.Color.white });
 }
 
+const details_w: f32 = 300;
+/// The panel ends above the message and info lines, which start 100 points up.
+const details_bottom: f32 = 100;
+/// A line of `info_text_size` text, rounded up, and the box's padding.
+const details_line_h: f32 = 16;
+const details_pad: f32 = 4;
+
+/// The EXIF details, top right: the info box is bottom left, so both fit. A short
+/// window shows the lines that fit whole.
+fn details(s: *State, c: *ui.Context) void {
+    assert(s.status == .shown);
+    const top = c.title_bar_height + 12;
+    const room = c.size.h - details_bottom - top - 2 * details_pad;
+    if (room < details_line_h) return;
+    const fit: u32 = @intFromFloat(@min(exif.lines_max, @floor(room / details_line_h)));
+    assert(fit >= 1 and fit <= exif.lines_max);
+    const x = @max(12, c.size.w - details_w - 12);
+    const box = ui.div(c).absolute().offset(x, top).w(details_w).px(8).py(details_pad)
+        .rounded(6).bg(ui.Color.black.alpha(0.6));
+    defer box.end();
+    const style: ui.TextStyle = .{
+        .size = info_text_size,
+        .color = ui.Color.white,
+        .truncate = .ellipsis,
+    };
+    var i: u32 = 0;
+    while (i < fit) : (i += 1) {
+        ui.text(c, s.details.line(i) orelse break, style);
+    }
+}
+
+fn toggle_details(s: *State) void {
+    s.details_shown = !s.details_shown;
+    if (s.details_shown and s.status != .empty) s.details.load(s.io, s.path());
+}
+
 fn pointer(s: *State, c: *ui.Context) void {
     assert(s.status == .shown);
     const in = &c.input;
@@ -475,6 +513,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .rotate_right => rotate(s, c, 1),
         .rotate_left => rotate(s, c, 3),
         .info => s.info_shown = !s.info_shown,
+        .details => toggle_details(s),
         .trash => s.request_trash(),
         .confirm_trash => unreachable,
         .restore => s.restore(),
