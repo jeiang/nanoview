@@ -976,6 +976,40 @@ test "a pasted picture shows as Clipboard, steps nowhere, and is not a file" {
     try testing.expect(!f.state.rename_open);
 }
 
+test "a pasted picture saves as PNG, has no EXIF or pages, and nothing crashes" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "a.jpeg",
+        .data = @embedFile("testdata/exif.jpeg"),
+    });
+    try f.open("a.jpeg");
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    try testing.expect(!f.tester.containsText("No EXIF data"));
+    const pixels = try testing.allocator.alloc(u8, 6 * 4 * 4);
+    defer testing.allocator.free(pixels);
+    @memset(pixels, 0x80);
+    const png = try ui.png.encode(testing.allocator, .{ .bytes = pixels, .width = 6, .height = 4 });
+    defer testing.allocator.free(png);
+    pasted = .{ .image = png };
+    _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
+    f.tester.frame();
+    // The panel does not keep the file's details, and reopening it reads no file.
+    try testing.expect(f.tester.containsText("No EXIF data"));
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    try testing.expect(f.tester.containsText("No EXIF data"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    var buf: [paths.path_max]u8 = undefined;
+    const target = paths.join(f.dir_buf[0..f.dir_len], "out.png", &buf).?;
+    @import("save.zig").save_to(f.state, target);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Saved out.png"));
+    try f.open("out.png");
+    try testing.expectEqual(@as(f32, 6), f.state.viewport.image_w);
+}
+
 test "pasting with no picture on the clipboard says so" {
     const f = try Fixture.create();
     defer f.destroy();

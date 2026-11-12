@@ -19,6 +19,7 @@ pub fn turn(s: *State, delta: i32) void {
     assert(delta == 1 or delta == -1);
     assert(s.page < s.page_count);
     if (s.status != .shown) return;
+    if (!s.is_file()) return s.notify("This picture is not a file", .{});
     if (s.page_count <= 1) {
         s.notify("Single page", .{});
         return;

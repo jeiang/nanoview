@@ -861,6 +861,7 @@ pub const State = struct {
         s.index = null;
         s.trash_pending = false;
         s.metadata.len = 0;
+        s.details.show(&.{});
         s.begin_picture();
         if (s.decode_current(bytes)) |source| {
             s.source = source;

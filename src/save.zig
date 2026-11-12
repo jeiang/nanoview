@@ -21,7 +21,8 @@ pub fn save_frame(s: *State) void {
     var name_buf: [name_len_max]u8 = undefined;
     const answer = nanoui.dialog.save(s.gpa, .{
         .title = "Save Frame as PNG",
-        .directory = s.dir(),
+        // A pasted picture has no folder: the panel opens where it last was.
+        .directory = if (s.is_file()) s.dir() else "",
         .name = suggested_name(s, &name_buf),
         .extensions = &.{"png"},
     }) catch |err| {
@@ -69,7 +70,11 @@ fn full_frame(s: *State) !png_save.Frame {
     }
     // nanoui decodes the shown picture or a preloaded one is smaller than its file:
     // neither keeps full-size pixels here. `current_pixels` is not shown in either case.
-    const bytes = try paths.read_file(s.io, s.path(), s.file_buffer);
+    // nanoui's bytes are the whole file already, and all a pasted picture has.
+    const bytes = switch (s.source) {
+        .encoded => |encoded| encoded,
+        else => try paths.read_file(s.io, s.path(), s.file_buffer),
+    };
     const full = std.math.maxInt(u32);
     const size = try decode.decode_fit(bytes, s.current_pixels, full, full, s.page);
     return .{

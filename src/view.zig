@@ -374,7 +374,9 @@ fn details(s: *State, c: *ui.Context) void {
 
 fn toggle_details(s: *State) void {
     s.details_shown = !s.details_shown;
-    if (s.details_shown and s.status != .empty) s.details.load(s.io, s.path());
+    if (!s.details_shown or s.status == .empty) return;
+    // A pasted picture is not a file to read.
+    if (s.is_file()) s.details.load(s.io, s.path()) else s.details.show(&.{});
 }
 
 fn pointer(s: *State, c: *ui.Context) void {
