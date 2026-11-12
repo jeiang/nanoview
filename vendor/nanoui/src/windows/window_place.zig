@@ -25,8 +25,8 @@ comptime {
     std.debug.assert(@sizeOf(WINDOWPLACEMENT) == 44);
 }
 
-extern "user32" fn GetWindowPlacement(hwnd: w.HWND, wp: *WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
-extern "user32" fn SetWindowPlacement(hwnd: w.HWND, wp: *const WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
+pub extern "user32" fn GetWindowPlacement(hwnd: w.HWND, wp: *WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
+pub extern "user32" fn SetWindowPlacement(hwnd: w.HWND, wp: *const WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
 extern "user32" fn MonitorFromRect(rect: *const w.RECT, flags: u32) callconv(.winapi) ?*anyopaque;
 
 const SW_SHOWMAXIMIZED: u32 = 3;
