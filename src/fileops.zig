@@ -142,12 +142,52 @@ fn move_windows(from: []const u8, to: []const u8) MoveError!void {
     };
 }
 
-/// One move to the Trash: the file's path, and where the Trash put it.
+/// Tells one file from another that later took its name or place.
+pub const Identity = struct { device: u64, inode: u64 };
+/// What a path names, without following a final symbolic link.
+pub const Node = struct { identity: Identity, uid: u32, socket: bool };
+const mode_type_mask: u32 = 0o170000;
+const mode_socket: u32 = 0o140000;
+
+/// Null when the path names nothing, and always on Windows, which has no
+/// device and inode numbers the viewer needs.
+pub fn node(path: []const u8) ?Node {
+    if (builtin.os.tag == .windows) return null;
+    assert(path.len > 0);
+    var buf: [paths.path_max + 1]u8 = undefined;
+    const p = z(path, &buf) catch return null;
+    if (builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        var st: linux.Statx = undefined;
+        const flags = linux.AT.SYMLINK_NOFOLLOW;
+        const rc = linux.statx(linux.AT.FDCWD, p, flags, .BASIC_STATS, &st);
+        if (linux.errno(rc) != .SUCCESS) return null;
+        if (!st.mask.INO or !st.mask.TYPE or !st.mask.UID) return null;
+        const device = (@as(u64, st.dev_major) << 32) | st.dev_minor;
+        return .{
+            .identity = .{ .device = device, .inode = st.ino },
+            .uid = st.uid,
+            .socket = st.mode & mode_type_mask == mode_socket,
+        };
+    }
+    var st: std.c.Stat = undefined;
+    if (std.c.fstatat(std.c.AT.FDCWD, p, &st, std.c.AT.SYMLINK_NOFOLLOW) != 0) return null;
+    const device: u32 = @bitCast(st.dev);
+    return .{
+        .identity = .{ .device = device, .inode = st.ino },
+        .uid = st.uid,
+        .socket = st.mode & mode_type_mask == mode_socket,
+    };
+}
+
+/// One move to the Trash: the file's path, where the Trash put it, and
+/// which file it was, so Restore never brings back another one.
 pub const Trashed = struct {
     original_buf: [paths.path_max]u8 = undefined,
     original_len: u32 = 0,
     location_buf: [paths.path_max]u8 = undefined,
     location_len: u32 = 0,
+    identity: Identity = undefined,
 
     pub fn original(t: *const Trashed) []const u8 {
         assert(t.original_len > 0 and t.original_len <= paths.path_max);
@@ -165,7 +205,12 @@ pub const TrashStack = struct {
     count: u32 = 0,
 
     /// The oldest entry drops out when the stack is full.
-    pub fn push(t: *TrashStack, original: []const u8, location: []const u8) void {
+    pub fn push(
+        t: *TrashStack,
+        original: []const u8,
+        location: []const u8,
+        identity: Identity,
+    ) void {
         assert(original.len > 0 and original.len <= paths.path_max);
         assert(location.len > 0 and location.len <= paths.path_max);
         if (t.count == trash_undo_max) {
@@ -177,6 +222,7 @@ pub const TrashStack = struct {
         item.original_len = @intCast(original.len);
         @memcpy(item.location_buf[0..location.len], location);
         item.location_len = @intCast(location.len);
+        item.identity = identity;
         t.count += 1;
         assert(t.count <= trash_undo_max);
     }
@@ -223,7 +269,7 @@ test "the trash stack undoes newest first and forgets the oldest past its limit"
     var name_buf: [32]u8 = undefined;
     for (0..trash_undo_max + 2) |i| {
         const name = try std.fmt.bufPrint(&name_buf, "/p/{d}.png", .{i});
-        stack.push(name, "/trash/x");
+        stack.push(name, "/trash/x", .{ .device = 1, .inode = i });
     }
     try testing.expectEqual(trash_undo_max, stack.count);
     try testing.expectEqualStrings("/p/17.png", stack.top().?.original());
