@@ -65,6 +65,9 @@ the snapshot flag a real window opens and does not exit.
 | `src/wuffs.zig`, `src/wuffs_bridge.c` | Wuffs: BMP, GIF, APNG, QOI, TGA into caller memory, no allocation |
 | `src/webp.zig`, `src/webp_bridge.c` | libwebp: still and animated WebP |
 | `src/wuffs_fixtures.zig` | Builds the Wuffs test pictures at compile time |
+| `src/animation.zig`, `src/playback.zig` | The frame player over fixed memory; frame timing and the playback commands |
+| `src/pages.zig` | Page turning for multi-page files |
+| `src/save.zig`, `src/png_save.zig` | Save frame as PNG; the streaming encoder with fixed buffers |
 | `src/settings.zig` | `Settings`, its defaults and the `settings.conf` parser |
 | `src/recent.zig` | The recent files list and its file |
 | `src/instance.zig`, `instance_posix.zig`, `instance_windows.zig` | Single instance: the message, a Unix socket, a mutex with `WM_COPYDATA` |

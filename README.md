@@ -36,6 +36,9 @@ Several pictures from one folder limit the list to those pictures until the next
 | `x` | Random picture |
 | F5, Cmd/Ctrl+Shift+R | Reload the file and its folder |
 | `s` | Start or stop the slideshow |
+| `k`, `.` | Pause or resume an animation; show its next frame |
+| `[`, `]` | Animation speed down, up, in steps of 25 % from 25 % to 400 % |
+| Alt+Down, Alt+Up | Next, previous page of a multi-page picture |
 | Wheel, pinch, `+`, `-` | Zoom, down to 10 % and up to 3200 % |
 | Drag, trackpad scroll | Pan |
 | `0`, `1`, double click | Fit, 100 %, toggle |
@@ -57,6 +60,7 @@ Several pictures from one folder limit the list to those pictures until the next
 | `t` | Keep the window above others |
 | Cmd/Ctrl+R | Reveal in file manager, with the file selected |
 | Cmd/Ctrl+Shift+C | Copy path |
+| Cmd/Ctrl+Shift+S | Save the shown frame or page as PNG, at full size and unrotated |
 
 Rotation, mirror and flip change the view only: nothing is written to disk. The folder is read
 again before a step when it changed on disk. A command that fails says so in the window.
@@ -86,9 +90,14 @@ choose it, and the info line names its real format. A folder is still listed by 
 Colors: macOS converts every picture to sRGB. Windows converts pictures with an embedded
 color profile. Linux shows the stored values.
 
-Animated pictures show their first frame. Linux needs GTK 3 or 4 and OpenGL. The licenses of
-the bundled code are in `share/licenses/nanoview` (in `Resources/licenses` inside the macOS
-app, in `licenses` beside the Windows program).
+Animated GIF, APNG and WebP play on every system. A frame delay under 20 ms plays as 100 ms,
+and the file's loop count is kept. An animation over 16 megapixels shows its first frame.
+Multi-page TIFF, multi-size ICO and similar files turn pages on macOS and Windows; Linux shows
+the first page, because gdk-pixbuf cannot choose one.
+
+Linux needs GTK 3 or 4 and OpenGL. The licenses of the bundled code are in
+`share/licenses/nanoview` (in `Resources/licenses` inside the macOS app, in `licenses` beside
+the Windows program).
 
 ### Settings
 
@@ -126,6 +135,7 @@ and the window names the first such line.
 | `always_on_top` | `false` | `true`, `false`: no effect on GTK 4 |
 | `recent` | `true` | `true`, `false`: remember the last 10 opened files and folders |
 | `single_instance` | `false` | `true`, `false`: a second start hands its files to the open window |
+| `animation` | `true` | `true`, `false`: `false` shows the first frame of an animation |
 
 `sort = system` follows Finder or Explorer. `date_created` exists on macOS only; elsewhere it
 sorts by the modified date and says so. `random` shuffles again on every folder read. The

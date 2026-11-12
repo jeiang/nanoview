@@ -18,6 +18,10 @@ section that matches its tag.
   the picture (`b`), and zoom below fit down to 10 %.
 - Opening a folder, and opening several pictures at once.
 - The info line also shows the format, file size and modified date.
+- Animated GIF, APNG and WebP play, with pause (`k`), next frame (`.`) and speed (`[`, `]`);
+  the `animation` setting turns it off.
+- Pages of multi-page TIFF and multi-size ICO files (Alt+Down, Alt+Up) on macOS and Windows.
+- Save the shown frame or page as PNG (Cmd/Ctrl+Shift+S).
 - EXIF details (`e`): camera, lens, date, exposure, GPS and color profile, from JPEG, TIFF-based
   files, PNG and WebP.
 - A picture is known by its content: a file with a wrong or missing extension opens when
