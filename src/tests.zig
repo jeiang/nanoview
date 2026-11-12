@@ -20,6 +20,7 @@ test {
     _ = @import("actions.zig");
     _ = @import("settings.zig");
     _ = @import("decode.zig");
+    _ = @import("fileops.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -488,4 +489,109 @@ test "zoom keys use the configured percentage and options notify" {
         _ = f.tester.shortcut(.{ .key = key });
         try testing.expect(f.tester.containsText(message));
     }
+}
+
+fn expect_file(f: *Fixture, name: []const u8, data: ?[]const u8) !void {
+    var buf: [64]u8 = undefined;
+    const read = f.tmp.dir.readFile(testing.io, name, &buf);
+    if (data) |d| try testing.expectEqualStrings(d, try read) else {
+        try testing.expectError(error.FileNotFound, read);
+    }
+}
+
+/// F2, then the whole name replaced by `name`, then Enter.
+fn rename_to(f: *Fixture, name: []const u8) void {
+    if (!f.state.rename_open) _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    f.tester.textOps(&.{.{ .command = .select_all }});
+    if (name.len == 0) f.tester.textOps(&.{.{ .command = .delete_backward }});
+    f.tester.typeText(name);
+    f.tester.key(.enter);
+}
+
+test "F2 renames the file on disk and sorts it into place" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "c.png", "d.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    try testing.expect(f.state.rename_open);
+    // The stem is selected: typing replaces it and keeps the extension.
+    f.tester.typeText("e");
+    try testing.expectEqualStrings("e.png", f.state.rename_buffer.text());
+    f.tester.key(.enter);
+    try testing.expect(!f.state.rename_open);
+    try expect_file(f, "a.png", null);
+    try testing.expectEqualStrings("e.png", f.state.basename());
+    try testing.expectEqual(@as(?u32, 2), f.state.index);
+    try testing.expectEqualStrings("c.png", f.state.folder.name(0));
+    try testing.expectEqualStrings("e.png", f.state.folder.name(2));
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    try testing.expect(f.tester.containsText("Renamed a.png to e.png"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("c.png", f.state.basename());
+}
+
+test "a bad new name says why and leaves the file and the field" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.png", .data = "picture" });
+    try f.open("a.png");
+    const long: [300]u8 = @splat('x');
+    const cases = [_][2][]const u8{
+        .{ "", "The name is empty" },
+        .{ "b/c.png", "A name cannot contain a slash" },
+        .{ "..", "A name cannot be . or .." },
+        .{ &long, "The name is too long" },
+    };
+    for (cases) |case| {
+        rename_to(f, case[0]);
+        try testing.expect(f.tester.containsText(case[1]));
+        try testing.expect(f.state.rename_open);
+        try expect_file(f, "a.png", "picture");
+    }
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "rename refuses to replace another file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.png", .data = "first" });
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "b.png", .data = "second" });
+    try f.open("a.png");
+    rename_to(f, "b.png");
+    try testing.expect(f.tester.containsText("b.png already exists"));
+    try expect_file(f, "a.png", "first");
+    try expect_file(f, "b.png", "second");
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "Escape closes the rename field and keeps the name" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    f.tester.typeText("zzz");
+    f.tester.key(.escape);
+    try testing.expect(!f.state.rename_open);
+    try expect_file(f, "zzz.png", null);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+}
+
+test "keys typed into the rename field run no actions" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 20, 10);
+    try f.write_png("b.png", 20, 10);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(2) });
+    try testing.expect(!f.tester.shortcut(.{ .key = 'r' }));
+    try testing.expect(!f.tester.shortcut(.{ .key = ui.Shortcut.right }));
+    f.tester.typeText("r");
+    f.tester.key(.right);
+    try testing.expectEqualStrings("r.png", f.state.rename_buffer.text());
+    try testing.expectEqual(@as(u2, 0), f.state.turns_user);
+    try testing.expectEqual(@as(f32, 20), f.state.viewport.image_w);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expect(f.state.rename_open);
 }

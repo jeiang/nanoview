@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 const settings_mod = @import("settings.zig");
 const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
+const fileops = @import("fileops.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -21,6 +22,9 @@ pub const current_pixels_max: u32 = if (builtin.os.tag == .macos)
 else
     decode.pixels_max * 4;
 pub const message_len_max: u32 = 512;
+/// Room past the longest name, so a name too long gets a message rather
+/// than keys that do nothing.
+pub const rename_bytes_max: u32 = folder_mod.name_len_max * 2;
 
 /// Pages for the large buffers. Debug builds fill `alloc` results with
 /// 0xAA, which would commit every page (about 1 GiB) at startup; the raw
@@ -90,6 +94,10 @@ pub const State = struct {
     slideshow_at: ?f64 = null,
     trash_pending: bool = false,
     metadata: metadata_mod.Metadata = .{},
+    rename_open: bool = false,
+    rename_focused: bool = false, // the field had the keyboard last frame
+    rename_storage: [rename_bytes_max]u8 = undefined,
+    rename_buffer: ui.TextBuffer = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -111,6 +119,7 @@ pub const State = struct {
             .file_buffer = file_buffer,
             .current_pixels = current_pixels,
         };
+        s.rename_buffer = .initFixed(&s.rename_storage);
         s.preload.init(io, &s.folder, pool, scratch);
         s.random_state = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
         if (s.random_state == 0) s.random_state = 1;
@@ -273,6 +282,7 @@ pub const State = struct {
         s.drag_last = null;
         s.promote_failed = false;
         s.slideshow_at = null;
+        s.rename_open = false;
         s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
@@ -480,6 +490,7 @@ pub const State = struct {
         s.index = null;
         s.path_len = 0;
         s.generation +%= 1;
+        s.rename_open = false;
         if (s.window) |w| {
             w.setTitle("nanoview");
             w.redraw();
@@ -487,16 +498,81 @@ pub const State = struct {
         assert(s.status == .empty);
     }
 
-    pub fn reveal(s: *const State) void {
+    /// False for a picture pasted from the clipboard: it has no path.
+    pub fn is_file(s: *const State) bool {
+        assert(s.status != .empty);
+        return s.path_len > 0;
+    }
+
+    pub fn reveal(s: *State) void {
         if (s.status == .empty) return;
-        assert(s.path_len > 0);
+        if (!s.is_file()) return s.notify("This picture is not a file", .{});
         shell.reveal(s.path());
     }
 
-    pub fn copy_path(s: *const State) void {
+    pub fn copy_path(s: *State) void {
         if (s.status == .empty) return;
-        assert(s.path_len > 0);
+        if (!s.is_file()) return s.notify("This picture is not a file", .{});
         nanoui.clipboard.writeText(s.path());
+    }
+
+    /// Opens the name field with the name before the extension selected;
+    /// the view draws it and calls `commit_rename` or `cancel_rename`.
+    pub fn start_rename(s: *State) void {
+        if (s.status == .empty) return;
+        if (!s.is_file()) return s.notify("This picture is not a file", .{});
+        const name = s.basename();
+        s.rename_buffer.set(name);
+        if (!std.mem.eql(u8, s.rename_buffer.text(), name)) {
+            return s.notify("Cannot rename {s}: the name is too long", .{name});
+        }
+        s.rename_buffer.want_selection = .{ 0, fileops.stem_len(name) };
+        s.rename_buffer.focus();
+        s.rename_open = true;
+        s.rename_focused = false;
+        s.slideshow_at = null;
+        assert(s.rename_buffer.text().len == name.len);
+    }
+
+    pub fn cancel_rename(s: *State) void {
+        assert(s.rename_open);
+        s.rename_open = false;
+    }
+
+    /// A failure leaves the file as it was and the field open to fix the name.
+    pub fn commit_rename(s: *State) void {
+        assert(s.rename_open and s.is_file());
+        const name = s.rename_buffer.text();
+        if (fileops.check_name(name)) |problem| return s.notify("{s}", .{problem.text()});
+        var old_buf: [paths.path_max]u8 = undefined;
+        const old = old_buf[0..s.basename().len];
+        @memcpy(old, s.basename());
+        if (std.mem.eql(u8, name, old)) return s.cancel_rename();
+        var target_buf: [paths.path_max]u8 = undefined;
+        const target = paths.join(s.dir(), name, &target_buf) orelse
+            return s.notify("{s}", .{fileops.NameProblem.too_long.text()});
+        fileops.move_no_replace(s.path(), target) catch |err| return switch (err) {
+            error.Exists => s.notify("{s} already exists", .{name}),
+            error.Missing => s.notify("{s} is no longer there", .{old}),
+            error.Failed => s.notify("Could not rename {s}", .{old}),
+        };
+        if (s.selection_only) s.rename_selected(old, name);
+        @memcpy(s.path_buf[0..target.len], target);
+        s.path_len = @intCast(target.len);
+        // The rescan sorts the new name into place; the load reads the
+        // picture again, since the rescan let go of its preloaded slot.
+        _ = s.refresh(true);
+        s.load();
+        s.notify("Renamed {s} to {s}", .{ old, s.basename() });
+        assert(!s.rename_open);
+    }
+
+    /// Opened as a selection of files: the new name stays in it.
+    fn rename_selected(s: *State, old: []const u8, name: []const u8) void {
+        assert(s.selection_only);
+        const i = s.selection.find(old) orelse return;
+        s.selection.remove(i);
+        if (!s.selection.add(name)) s.selection_only = false;
     }
 
     pub fn on_open_files(ctx: *anyopaque, files: []const []const u8) void {

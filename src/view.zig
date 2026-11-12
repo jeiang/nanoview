@@ -30,6 +30,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     drops(s, c, root.index);
     body(s, c);
     message(s, c);
+    rename_field(s, c);
 }
 
 fn body(s: *State, c: *ui.Context) void {
@@ -57,7 +58,7 @@ fn body(s: *State, c: *ui.Context) void {
 
 const message_seconds: f64 = 4;
 fn slideshow(s: *State, c: *ui.Context) void {
-    if (s.trash_pending) {
+    if (s.trash_pending or s.rename_open) {
         s.slideshow_at = null;
         return;
     }
@@ -94,6 +95,31 @@ fn message(s: *State, c: *ui.Context) void {
         .bg(ui.Color.black.alpha(0.6));
     defer box.end();
     ui.text(c, s.message(), .{ .size = info_text_size, .color = ui.Color.white });
+}
+
+const rename_width_max: f32 = 360;
+const rename_width_min: f32 = 120;
+
+/// The name field over the picture while Rename is open: Enter renames,
+/// Escape (or a click elsewhere, which takes the keyboard away) cancels.
+fn rename_field(s: *State, c: *ui.Context) void {
+    if (!s.rename_open) return;
+    assert(s.status != .empty);
+    const width = @max(rename_width_min, @min(rename_width_max, c.size.w - 48));
+    const box = ui.div(c).absolute().offset(12, c.title_bar_height + 12).px(6).py(6)
+        .rounded(8).bg(ui.Color.black.alpha(0.6));
+    defer box.end();
+    const result = ui.textField(c, &s.rename_buffer, .{ .width = .{ .px = width } });
+    if (result.submitted) {
+        s.commit_rename();
+        if (!s.rename_open) c.focus = 0;
+        return;
+    }
+    if (s.rename_focused and !result.focused) {
+        s.cancel_rename();
+        return;
+    }
+    s.rename_focused = result.focused;
 }
 
 /// The upright size and turns of a newly loaded picture, and a fitted view.
@@ -317,6 +343,7 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
         ui.Shortcut.home => .home,
         ui.Shortcut.end => .end,
         ui.Shortcut.enter => .enter,
+        ui.Shortcut.f(2) => .f2,
         ui.Shortcut.f(5) => .f5,
         ui.Shortcut.escape => .escape,
         ui.Shortcut.forward_delete => .delete,
@@ -333,9 +360,11 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     return true;
 }
 
-/// One key event runs at most one action.
+/// One key event runs at most one action. The rename field takes every key
+/// while it is open.
 fn keys(s: *State, c: *ui.Context) void {
     assert(s.path_len <= paths.path_max);
+    if (s.rename_open) return;
     for (actions.bindings) |b| {
         if (!key_hit(c, b.shortcut)) continue;
         perform(s, c, b.action);
@@ -389,6 +418,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .confirm_trash => unreachable,
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
+        .rename => s.start_rename(),
     }
 }
 
