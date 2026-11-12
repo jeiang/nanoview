@@ -24,24 +24,80 @@ nix run github:jeiang/nanoview -- picture.jpg
 
 ## Use
 
-Open a picture from the command line, with Cmd/Ctrl+O, by dropping it on the window, or with
-Finder's "Open With".
+Open a picture, a folder or several pictures from the command line, with Cmd/Ctrl+O, by
+dropping them on the window, or with Finder's "Open With". A folder shows its first picture.
+Several pictures from one folder limit the list to those pictures until the next open.
 
 | Key | Action |
 |---|---|
-| Left, Right | Previous, next picture in the folder |
-| Wheel, pinch, `+`, `-` | Zoom |
+| Left, Right, Space, Shift+Space | Previous, next picture in the folder |
+| Mouse Back, Forward | Previous, next picture |
+| Home, End | First, last picture |
+| `x` | Random picture |
+| F5, Cmd/Ctrl+Shift+R | Reload the file and its folder |
+| `s` | Start or stop the slideshow |
+| Wheel, pinch, `+`, `-` | Zoom, down to 10 % and up to 3200 % |
 | Drag, trackpad scroll | Pan |
 | `0`, `1`, double click | Fit, 100 %, toggle |
+| `w` | Fit mode: whole, width, height, fill |
+| `u` | Let fit enlarge small pictures |
+| `p` | Smooth or sharp pixels above 100 % |
+| `z` | Zoom lock: the next picture keeps the zoom and position |
+| `b` | Checkerboard behind the picture |
 | `r`, `l` | Rotate right, left |
-| `i` | Show name, size, zoom and position |
+| `m`, `v` | Mirror, flip |
+| `i` | Show name, size, zoom, position, format, file size and date |
 | `f`, Escape | Full screen, leave full screen |
 | Cmd+Backspace, Forward Delete | Move to Trash |
-| Cmd/Ctrl+R | Reveal in file manager |
+| Cmd/Ctrl+R | Reveal in file manager, with the file selected |
 | Cmd/Ctrl+Shift+C | Copy path |
 
-On macOS nanoview shows PNG, JPEG, GIF, HEIC, WebP, AVIF, TIFF, BMP and ICO. On Linux and
-Windows it shows PNG, JPEG and the first frame of GIF. Linux needs GTK 3 or 4 and OpenGL.
+Rotation, mirror and flip change the view only: nothing is written to disk. The folder is read
+again before a step when it changed on disk. A command that fails says so in the window.
+
+### Formats
+
+- macOS (ImageIO): PNG, JPEG, GIF, HEIC, WebP, AVIF, TIFF, BMP, ICO, JPEG 2000, PSD, ICNS, TGA,
+  OpenEXR, SGI and PBM.
+- Linux: PNG, JPEG and GIF always. With gdk-pixbuf 2 (`libgdk_pixbuf-2.0.so.0`) installed, also
+  what its loaders read from this set: WebP, AVIF, HEIC, TIFF, BMP, ICO, TGA, QOI, JPEG XL,
+  JPEG 2000, ICNS, PNM, PCX, XBM and XPM.
+- Windows (WIC): PNG, JPEG, GIF, BMP, ICO, TIFF, WebP, DDS and JPEG XR. HEIC, AVIF and JPEG XL
+  need the matching codec from the Microsoft Store.
+
+Animated pictures show their first frame. Linux needs GTK 3 or 4 and OpenGL.
+
+### Settings
+
+nanoview reads `settings.conf` once at startup and never writes it. A missing file means the
+defaults.
+
+- macOS: `~/Library/Application Support/nanoview/settings.conf`
+- Linux: `$XDG_CONFIG_HOME/nanoview/settings.conf` (default `~/.config/nanoview/`)
+- Windows: `%APPDATA%\nanoview\settings.conf`
+
+One `key = value` per line; `#` starts a comment. A line that cannot be used keeps its default,
+and the window names the first such line.
+
+| Key | Default | Values |
+|---|---|---|
+| `fit_mode` | `whole` | `whole`, `width`, `height`, `fill` |
+| `fit_upscale` | `false` | `true`, `false` |
+| `smooth` | `true` | `true`, `false` |
+| `zoom_lock` | `false` | `true`, `false` |
+| `checkerboard` | `false` | `true`, `false` |
+| `zoom_step_percent` | `25` | 1 to 400 |
+| `loop` | `true` | `true`, `false`: step from the last picture to the first |
+| `slideshow_seconds` | `5` | 1 to 3600 |
+| `slideshow_reverse` | `false` | `true`, `false` |
+| `trash_confirm` | `false` | `true`, `false`: ask before Move to Trash |
+| `after_trash` | `next` | `next`, `previous` |
+
+### Linux and Windows
+
+These builds are compiled and unit-tested from macOS but have not been run on those systems
+yet. On Linux, Move to Trash follows the FreeDesktop.org Trash specification; on Windows it
+uses the Recycle Bin. On Windows, Ctrl+wheel zooms continuously, the same as a touchpad pinch.
 
 ## Build
 

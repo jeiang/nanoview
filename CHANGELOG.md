@@ -10,10 +10,28 @@ section that matches its tag.
 ### Added
 
 - A release archive for Windows on arm64.
+- Home and End, a random picture (`x`), reload (F5, Cmd/Ctrl+Shift+R), Space and Shift+Space,
+  and the mouse's Back and Forward buttons.
+- A slideshow (`s`).
+- Mirror (`m`) and flip (`v`), fit modes (`w`: whole, width, height, fill), fit that enlarges
+  small pictures (`u`), sharp pixels above 100 % (`p`), zoom lock (`z`), a checkerboard behind
+  the picture (`b`), and zoom below fit down to 10 %.
+- Opening a folder, and opening several pictures at once.
+- The info line also shows the format, file size and modified date.
+- `settings.conf`, read at startup: fit, zoom, loop, slideshow and trash options.
+- macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI and PBM pictures.
+- Linux: pictures decode through gdk-pixbuf when it is installed (WebP, AVIF, HEIC, TIFF, BMP,
+  ICO and more); Move to Trash; reveal selects the file; touchpad pan and pinch; the window
+  takes the picture's size on GTK 4.
+- Windows: pictures decode through WIC (BMP, ICO, TIFF, WebP, DDS, JPEG XR, and HEIC, AVIF and
+  JPEG XL with a codec installed); Move to Trash; reveal selects the file; real full screen;
+  touchpad pan and pinch; the window takes the picture's size.
 
 ### Changed
 
 - nanoui v0.14.0 is vendored in `vendor/nanoui`, so nanoview can carry patches to it.
+- The folder is read again before a step when it changed on disk.
+- Linux and Windows preload decoded pixels, as macOS does.
 
 ### Fixed
 

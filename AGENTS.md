@@ -37,13 +37,20 @@ the snapshot flag a real window opens and does not exit.
 
 | File | Role |
 |---|---|
-| `src/main.zig` | Startup: buffers, window, worker thread, first argument |
-| `src/app.zig` | `State` and commands: open, step, trash, reveal, promote |
+| `src/main.zig` | Startup: buffers, settings, window, worker thread, arguments |
+| `src/app.zig` | `State` and commands: open, step, slideshow, trash, reveal, promote |
 | `src/view.zig` | Per-frame UI: keys, pointer, drops, drawing, window fit |
 | `src/actions.zig` | The `Action` list and the default keys; `view.perform` runs them |
 | `src/viewport.zig` | Zoom, pan, fit and the visible part of a rotated picture |
 | `src/folder.zig` | Folder listing, natural and Finder-style sorting |
 | `src/preload.zig` | Worker that preloads neighbors into a fixed pool |
+| `src/decode.zig` | `decode_fit`: one entry to the system decoder; size and limit checks |
+| `src/decode_macos.zig`, `decode_linux.zig`, `decode_windows.zig` | ImageIO, gdk-pixbuf (dlopen), WIC (COM by hand) |
+| `src/settings.zig` | `Settings`, its defaults and the `settings.conf` parser |
+| `src/metadata.zig` | File size, date and format for the info line |
+| `src/shell.zig` | Trash and reveal; macOS goes through nanoui |
+| `src/shell_linux.zig`, `shell_dbus.zig` | FreeDesktop trash; `FileManager1.ShowItems` through GIO (dlopen) |
+| `src/shell_windows.zig` | Recycle Bin and Explorer selection |
 | `src/sort_order.zig` | Picks the system file manager's order per OS |
 | `src/ds_store.zig`, `src/bplist.zig` | Finder `.DS_Store` and binary plist readers |
 | `src/explorer_sort.zig` | Explorer window sort order over COM (Windows only) |
