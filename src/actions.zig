@@ -22,6 +22,7 @@ pub const Action = enum {
     zoom_lock,
     checkerboard,
     full_screen,
+    always_on_top,
     leave_full_screen,
     rotate_right,
     rotate_left,
@@ -63,6 +64,7 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = 'z' }, .action = .zoom_lock },
     .{ .shortcut = .{ .key = 'b' }, .action = .checkerboard },
     .{ .shortcut = .{ .key = 'f' }, .action = .full_screen },
+    .{ .shortcut = .{ .key = 't' }, .action = .always_on_top },
     .{ .shortcut = .{ .key = key.escape }, .action = .leave_full_screen },
     .{ .shortcut = .{ .key = 'r' }, .action = .rotate_right },
     .{ .shortcut = .{ .key = 'l' }, .action = .rotate_left },
@@ -76,7 +78,7 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = 'c', .cmd = true, .shift = true }, .action = .copy_path },
 };
 
-fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
+pub fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
     return a.key == b.key and a.cmd == b.cmd and a.ctrl == b.ctrl and a.alt == b.alt and
         a.shift == b.shift;
 }

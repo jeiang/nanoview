@@ -19,6 +19,8 @@ test {
     _ = @import("shell.zig");
     _ = @import("actions.zig");
     _ = @import("settings.zig");
+    _ = @import("keymap.zig");
+    _ = @import("recent.zig");
     _ = @import("decode.zig");
     _ = @import("webp.zig");
     _ = @import("wuffs.zig");
@@ -506,4 +508,153 @@ test "off macOS a typed plus zooms in with Shift held" {
     f.tester.setMods(.{});
     f.tester.typeText("-");
     try testing.expect(f.state.viewport.scale < zoomed);
+}
+
+test "a rebound key runs its action and its old key no longer does" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 4, 4);
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "settings.conf",
+        .data = "key.next = n, PageDown\nkey.previous = shift+N\n",
+    });
+    f.state.load_settings(f.dir_buf[0..f.dir_len]);
+    try testing.expectEqual(@as(u32, 0), f.state.message_len);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = 'n' });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    _ = f.tester.shortcut(.{ .key = ' ' });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = 'n', .shift = true });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.page_down });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+}
+
+test "a key bound twice in settings.conf is named in the window" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "settings.conf",
+        .data = "# keys\nkey.info = x\n",
+    });
+    f.state.load_settings(f.dir_buf[0..f.dir_len]);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("settings.conf line 2: key bound to two actions"));
+}
+
+test "each title mode gives its text" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    f.tester.frame();
+    try testing.expectEqualStrings("nanoview", f.state.title());
+    try f.write_png("a.png", 20, 10);
+    try f.write_png("b.png", 20, 10);
+    try f.open("a.png");
+    try testing.expectEqualStrings("a.png", f.state.title());
+    const Title = @import("settings.zig").Title;
+    const cases = [_]struct { Title, []const u8 }{
+        .{ .name_position, "a.png (1/2)" },
+        .{ .full, "a.png (1/2) · 20×10 · 100%" },
+        .{ .none, "nanoview" },
+    };
+    for (cases) |case| {
+        f.state.settings.title = case[0];
+        f.tester.frame();
+        try testing.expectEqualStrings(case[1], f.state.title());
+    }
+    f.state.settings.title = .full;
+    _ = f.tester.shortcut(.{ .key = '1' });
+    _ = f.tester.shortcut(.{ .key = '=' });
+    try testing.expectEqualStrings("a.png (1/2) · 20×10 · 125%", f.state.title());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("b.png (2/2) · 20×10 · 100%", f.state.title());
+}
+
+test "window_fit and the percentage bounds size the window" {
+    var settings: @import("settings.zig").Settings = .{};
+    const screen: [2]f64 = .{ 1000, 800 };
+    const big = view.fitted_size(&settings, true, screen, .{ 3000, 2000 }).?;
+    try testing.expectApproxEqAbs(@as(f64, 800), big[0], 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 533.333), big[1], 0.001);
+    const small = view.fitted_size(&settings, true, screen, .{ 100, 100 }).?;
+    try testing.expectEqual([2]f64{ 320, 240 }, small);
+    settings.window_min_percent = 70;
+    try testing.expectEqual([2]f64{ 800, 560 }, view.fitted_size(&settings, true, screen, .{
+        3000, 2000,
+    }).?);
+    settings.window_fit = .first;
+    try testing.expect(view.fitted_size(&settings, false, screen, .{ 100, 100 }) != null);
+    try testing.expect(view.fitted_size(&settings, true, screen, .{ 100, 100 }) == null);
+    settings.window_fit = .never;
+    try testing.expect(view.fitted_size(&settings, false, screen, .{ 100, 100 }) == null);
+}
+
+test "the background setting colors the window behind the picture" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    f.state.settings.background = .{ .color = .{ .r = 255, .g = 0, .b = 0 } };
+    f.tester.frame();
+    const pixels = try f.tester.render(testing.allocator);
+    defer pixels.deinit(testing.allocator);
+    // BGRA, at the top left corner, away from the hint text.
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 255, 255 }, pixels.bytes[0..4]);
+}
+
+test "t toggles always on top and says so" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    _ = f.tester.shortcut(.{ .key = 't' });
+    try testing.expect(f.state.settings.always_on_top);
+    try testing.expect(f.tester.containsText("Always on top: on"));
+    _ = f.tester.shortcut(.{ .key = 't' });
+    try testing.expect(f.tester.containsText("Always on top: off"));
+}
+
+test "the sort setting orders the folder" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 64, 64);
+    try f.write_png("c.png", 16, 16);
+    f.state.settings.sort = .size;
+    f.state.settings.sort_descending = true;
+    try f.open("a.png");
+    try testing.expectEqualStrings("b.png", f.state.folder.name(0));
+    try testing.expectEqualStrings("a.png", f.state.folder.name(2));
+    try testing.expectEqual(@as(?u32, 2), f.state.index);
+    f.state.settings.sort = .random;
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(5) });
+    try testing.expectEqual(@as(u32, 3), f.state.folder.count);
+    try testing.expectEqualStrings("a.png", f.state.folder.name(f.state.index.?));
+}
+
+test "opening a picture records it in the recent file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 4, 4);
+    var buf: [paths.path_max]u8 = undefined;
+    const state_dir = paths.join(f.dir_buf[0..f.dir_len], "state", &buf).?;
+    f.state.load_recent(state_dir);
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try f.open("b.png");
+    try testing.expectEqual(@as(u32, 2), f.state.recent_count());
+    try testing.expect(std.mem.endsWith(u8, f.state.recent(0).?, "b.png"));
+    try testing.expect(std.mem.endsWith(u8, f.state.recent(1).?, "a.png"));
+    try testing.expect(f.state.recent(2) == null);
+    var bytes: [2 * paths.path_max]u8 = undefined;
+    const saved = try f.tmp.dir.readFile(testing.io, "state/recent", &bytes);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, saved, "\n"));
+    f.state.clear_recent();
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
+    const cleared = try f.tmp.dir.readFile(testing.io, "state/recent", &bytes);
+    try testing.expectEqual(@as(usize, 0), cleared.len);
+    f.state.settings.recent = false;
+    try f.open("a.png");
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
 }

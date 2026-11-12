@@ -8,6 +8,8 @@ const orientation = @import("orientation.zig");
 const viewport = @import("viewport.zig");
 const preload = @import("preload.zig");
 const actions = @import("actions.zig");
+const keymap = @import("keymap.zig");
+const settings_mod = @import("settings.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -25,11 +27,26 @@ pub fn view(s: *State, c: *ui.Context) void {
     keys(s, c);
     slideshow(s, c);
 
-    const root = ui.div(c).sizeFull().center().bg(c.theme.background);
+    const root = ui.div(c).sizeFull().center().bg(background(s, c));
     defer root.end();
     drops(s, c, root.index);
     body(s, c);
     message(s, c);
+    s.update_title();
+}
+
+fn background(s: *const State, c: *const ui.Context) ui.Color {
+    const rgb = switch (s.settings.background) {
+        .theme => return c.theme.background,
+        .color => |rgb| rgb,
+    };
+    const result: ui.Color = .{
+        .r = @as(f32, @floatFromInt(rgb.r)) / 255,
+        .g = @as(f32, @floatFromInt(rgb.g)) / 255,
+        .b = @as(f32, @floatFromInt(rgb.b)) / 255,
+    };
+    assert(result.r <= 1 and result.g <= 1 and result.b <= 1);
+    return result;
 }
 
 fn body(s: *State, c: *ui.Context) void {
@@ -138,8 +155,8 @@ fn preload_bounds(s: *State, c: *const ui.Context) void {
     if (s.window) |win| {
         const m = win.monitorSize();
         if (!win.isFullScreen() and m[0] > 0 and m[1] > 0) {
-            w = m[0] * window_screen_share;
-            h = m[1] * window_screen_share;
+            w = m[0] * share(s.settings.window_max_percent);
+            h = m[1] * share(s.settings.window_max_percent);
         }
     }
     w = @max(1, @ceil(w * c.scale));
@@ -217,9 +234,37 @@ fn rotate(s: *State, c: *ui.Context, quarter: u2) void {
 
 const window_w_min: f64 = 320;
 const window_h_min: f64 = 240;
-const window_screen_share: f64 = 0.8;
 
-/// The window takes the picture's size, within 80 % of the screen.
+fn share(percent: u32) f64 {
+    assert(percent <= 100);
+    return @as(f64, @floatFromInt(percent)) / 100;
+}
+
+/// The window size for a picture of `picture` points on a screen of
+/// `monitor` points, within the percentage bounds; null when `window_fit`
+/// leaves the window as it is.
+pub fn fitted_size(
+    settings: *const settings_mod.Settings,
+    fitted_before: bool,
+    monitor: [2]f64,
+    picture: [2]f64,
+) ?[2]f64 {
+    assert(monitor[0] > 0 and monitor[1] > 0 and picture[0] > 0 and picture[1] > 0);
+    switch (settings.window_fit) {
+        .never => return null,
+        .first => if (fitted_before) return null,
+        .always => {},
+    }
+    const room = share(settings.window_max_percent);
+    const least = share(settings.window_min_percent);
+    const fit = @min(1, @min(monitor[0] * room / picture[0], monitor[1] * room / picture[1]));
+    const w = @max(window_w_min, monitor[0] * least, picture[0] * fit);
+    const h = @max(window_h_min, monitor[1] * least, picture[1] * fit);
+    assert(w >= window_w_min and h >= window_h_min);
+    return .{ w, h };
+}
+
+/// The window takes the picture's size, as `fitted_size` gives it.
 fn resize_window(s: *State, c: *const ui.Context) void {
     const w = s.window orelse return;
     if (w.isFullScreen()) return;
@@ -229,15 +274,10 @@ fn resize_window(s: *State, c: *const ui.Context) void {
     const content = w.contentSize();
     if (m[0] <= 0 or m[1] <= 0 or (m[0] == content[0] and m[1] == content[1])) return;
     assert(c.scale > 0);
-    const pic_w: f64 = s.viewport.image_w / c.scale;
-    const pic_h: f64 = s.viewport.image_h / c.scale;
-    const room_w = m[0] * window_screen_share;
-    const room_h = m[1] * window_screen_share;
-    const fit = @min(1, @min(room_w / pic_w, room_h / pic_h));
-    const target_w = @max(window_w_min, pic_w * fit);
-    const target_h = @max(window_h_min, pic_h * fit);
-    assert(target_w >= window_w_min and target_h >= window_h_min);
-    w.setSize(target_w, target_h);
+    const picture: [2]f64 = .{ s.viewport.image_w / c.scale, s.viewport.image_h / c.scale };
+    const size = fitted_size(&s.settings, s.window_fitted, m, picture) orelse return;
+    w.setSize(size[0], size[1]);
+    s.window_fitted = true;
 }
 
 const info_text_size: f32 = 12;
@@ -311,18 +351,22 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
     if (c.input.cmd or c.input.ctrl or c.input.alt) return false;
-    // `?Key`: nanoui does not export its key enum from `ui`.
-    const Key = @FieldType(@FieldType(ui.Context, "input"), "key");
-    const want: Key = switch (sc.key) {
-        ui.Shortcut.left => .left,
-        ui.Shortcut.right => .right,
-        ui.Shortcut.home => .home,
-        ui.Shortcut.end => .end,
-        ui.Shortcut.enter => .enter,
-        ui.Shortcut.f(5) => .f5,
-        ui.Shortcut.escape => .escape,
-        ui.Shortcut.forward_delete => .delete,
-        else => null,
+    const S = ui.Shortcut;
+    const want: ?NamedKey = switch (sc.key) {
+        S.left => .left,
+        S.right => .right,
+        S.up => .up,
+        S.down => .down,
+        S.home => .home,
+        S.end => .end,
+        S.page_up => .page_up,
+        S.page_down => .page_down,
+        S.enter => .enter,
+        S.tab => .tab,
+        S.escape => .escape,
+        S.backspace => .backspace,
+        S.forward_delete => .delete,
+        else => function_key(sc.key),
     };
     if (want) |k| {
         if (c.input.key != k or c.input.shift != sc.shift) return false;
@@ -339,10 +383,21 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     return true;
 }
 
+// nanoui does not export its key enum from `ui`.
+const NamedKey = @typeInfo(@FieldType(@FieldType(ui.Context, "input"), "key")).optional.child;
+
+fn function_key(key: u21) ?NamedKey {
+    const first = ui.Shortcut.f(1);
+    if (key < first or key > ui.Shortcut.f(keymap.function_key_max)) return null;
+    const result: NamedKey = @fromBackingInt(@intCast(@backingInt(NamedKey.f1) + (key - first)));
+    assert(result != .f1 or key == first);
+    return result;
+}
+
 /// One key event runs at most one action.
 fn keys(s: *State, c: *ui.Context) void {
     assert(s.path_len <= paths.path_max);
-    for (actions.bindings) |b| {
+    for (s.keymap.slice()) |b| {
         if (!key_hit(c, b.shortcut)) continue;
         perform(s, c, b.action);
         return;
@@ -388,6 +443,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         },
         .full_screen => if (s.window) |w| w.setFullScreen(!w.isFullScreen()),
         .leave_full_screen => if (s.window) |w| w.setFullScreen(false),
+        .always_on_top => option(s, action),
         .rotate_right => rotate(s, c, 1),
         .rotate_left => rotate(s, c, 3),
         .info => s.info_shown = !s.info_shown,
@@ -436,9 +492,13 @@ fn option(s: *State, action: actions.Action) void {
         .checkerboard => .{ &opts.checkerboard, "Checkerboard" },
         .mirror => .{ &s.mirror, "Mirror" },
         .flip => .{ &s.flip, "Flip" },
+        .always_on_top => .{ &opts.always_on_top, "Always on top" },
         else => unreachable,
     };
     value.* = !value.*;
+    if (action == .always_on_top) {
+        if (s.window) |w| w.setAlwaysOnTop(value.*);
+    }
     fit_options(s);
     assert(s.viewport.mirror == s.mirror and s.viewport.flip == s.flip);
     s.notify("{s}: {s}", .{ name, if (value.*) "on" else "off" });

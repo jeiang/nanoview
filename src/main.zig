@@ -5,6 +5,7 @@ const app_state = @import("app.zig");
 const view = @import("view.zig");
 const preload = @import("preload.zig");
 const settings = @import("settings.zig");
+const recent = @import("recent.zig");
 const State = app_state.State;
 
 // About 1.2 MiB: never on the stack.
@@ -24,6 +25,7 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.free_pages(current_pixels);
     state.init(init.io, init.gpa, file_buffer, pool, scratch, current_pixels);
     load_settings(init);
+    load_recent(init);
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{
         .title = "nanoview",
@@ -36,7 +38,14 @@ pub fn main(init: std.process.Init) !void {
         .height = 600,
         .min_width = 320,
         .min_height = 240,
-        .title_bar = if (builtin.os.tag == .macos) .hidden else .default,
+        // macOS always draws under its title bar; nanoui's GTK window has
+        // no hidden one, so Linux keeps the system's.
+        .title_bar = if (builtin.os.tag == .macos or
+            (builtin.os.tag == .windows and state.settings.title_bar == .hidden))
+            .hidden
+        else
+            .default,
+        .always_on_top = state.settings.always_on_top,
         .content = .{ .view = .init(&state, view.view) },
     });
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -62,4 +71,14 @@ fn load_settings(init: std.process.Init) void {
     };
     defer init.gpa.free(directory);
     state.load_settings(directory);
+}
+
+fn load_recent(init: std.process.Init) void {
+    if (!state.settings.recent) return;
+    const directory = recent.directory(init.gpa, init.environ_map) catch |err| {
+        state.notify("Recent files: {s}", .{@errorName(err)});
+        return;
+    };
+    defer init.gpa.free(directory);
+    state.load_recent(directory);
 }

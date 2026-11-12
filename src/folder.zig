@@ -78,6 +78,19 @@ pub const Folder = struct {
         assert(f.count < 2 or !entry_less(f, f.entries[1], f.entries[0]));
     }
 
+    /// The `random` order: every arrangement as likely, from `seed`.
+    pub fn shuffle(f: *Folder, seed: u64) void {
+        assert(seed != 0 and f.count <= entries_max);
+        var state = seed;
+        var i = f.count;
+        while (i > 1) : (i -= 1) {
+            state = xorshift(state);
+            const j: u32 = @intCast(state % i);
+            std.mem.swap(Entry, &f.entries[i - 1], &f.entries[j]);
+        }
+        assert(i <= 1);
+    }
+
     fn entry_less(f: *const Folder, a: Entry, b: Entry) bool {
         const na = f.slice(a);
         const nb = f.slice(b);
@@ -280,6 +293,17 @@ fn compare_numbers(a: []const u8, b: []const u8) std.math.Order {
     return std.mem.order(u8, a, b);
 }
 
+/// A nonzero state stays nonzero.
+pub fn xorshift(state: u64) u64 {
+    assert(state != 0);
+    var x = state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    assert(x != 0);
+    return x;
+}
+
 const testing = std.testing;
 
 test "natural_less orders numbers by value" {
@@ -337,4 +361,60 @@ test "sort follows the order's key and direction" {
     f.order = .{ .key = .kind, .ascending = true };
     f.sort();
     try testing.expectEqualStrings("z.jpg", f.name(0));
+}
+
+test "each sort key orders entries, descending reverses only the key" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    const names = [_][]const u8{ "b.png", "a.jpg", "c.gif", "d.png" };
+    const sizes = [_]i64{ 2, 2, 1, 3 };
+    const dates = [_]i64{ 5, 1, 5, 3 };
+    for (names) |n| try testing.expect(f.add(n));
+    const Case = struct { sort_order.Choice, [4]u8, [4]u8 };
+    const cases = [_]Case{
+        .{ .name, "abcd".*, "dcba".* },
+        .{ .kind, "cabd".*, "bdac".* },
+        .{ .size, "cabd".*, "dabc".* },
+        .{ .date_modified, "adbc".*, "bcda".* },
+        .{ .date_created, "adbc".*, "bcda".* },
+        .{ .random, "abcd".*, "abcd".* },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }, [_][4]u8{ case[1], case[2] }) |descending, expected| {
+            f.order = sort_order.resolve(testing.io, "/", case[0], descending);
+            for (f.entries[0..f.count]) |*e| {
+                const k = for (names, 0..) |n, k| {
+                    if (std.mem.eql(u8, n, f.slice(e.*))) break k;
+                } else unreachable;
+                e.value = if (case[0] == .size) sizes[k] else dates[k];
+            }
+            f.sort();
+            for (expected, 0..) |letter, i| try testing.expectEqual(letter, f.name(@intCast(i))[0]);
+        }
+    }
+}
+
+test "a shuffle is a permutation and find still works" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    var buf: [8]u8 = undefined;
+    for (0..20) |i| try testing.expect(f.add(try std.fmt.bufPrint(&buf, "{d}.png", .{i})));
+    f.sort();
+    f.shuffle(42);
+    try testing.expectEqual(@as(u32, 20), f.count);
+    var moved: u32 = 0;
+    for (0..20) |i| {
+        const name_i = try std.fmt.bufPrint(&buf, "{d}.png", .{i});
+        const at = f.find(name_i).?;
+        try testing.expectEqualStrings(name_i, f.name(at));
+        moved += @intFromBool(at != i);
+    }
+    try testing.expect(moved > 0);
+    f.remove(3);
+    for (0..f.count) |i| {
+        const at: u32 = @intCast(i);
+        try testing.expectEqual(@as(?u32, at), f.find(f.name(at)));
+    }
 }
