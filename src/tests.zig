@@ -1480,3 +1480,22 @@ test "save failure cannot truncate an existing destination" {
     const bytes = try f.tmp.dir.readFile(testing.io, "existing.png", &back);
     try testing.expectEqualStrings("original bytes", bytes);
 }
+
+test "an oversized single-frame GIF does not warn about animation" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const palette = .{ .{ 255, 0, 0 }, .{ 0, 255, 0 }, .{ 0, 0, 255 }, .{ 0, 0, 0 } };
+    const single = comptime anim_fixtures.gif(4097, 4096, palette, null, &.{gif_dot(&.{0}, 10)});
+    const multi = comptime anim_fixtures.gif(4097, 4096, palette, null, &.{
+        gif_dot(&.{0}, 10), gif_dot(&.{1}, 10),
+    });
+    const playback = @import("playback.zig");
+    try testing.expect(!animation.multiple_frames(single));
+    try testing.expect(animation.multiple_frames(multi));
+    for (6..single.len) |n| try testing.expect(!animation.multiple_frames(single[0..n]));
+    try testing.expect(!playback.play(f.state, single));
+    try testing.expectEqual(@as(u32, 0), f.state.message_len);
+    try testing.expect(!playback.play(f.state, multi));
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Too large to animate"));
+}

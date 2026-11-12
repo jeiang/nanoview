@@ -60,6 +60,58 @@ pub fn detect(bytes: []const u8) ?Found {
     return .{ .kind = .wuffs, .width = info.width, .height = info.height, .frame_count = null };
 }
 
+/// For the over-limit notice only: GIF headers do not say how many frames exist.
+/// Walk block boundaries, never compressed pixels, until a second image descriptor.
+pub fn multiple_frames(bytes: []const u8) bool {
+    const gif = std.mem.startsWith(u8, bytes, "GIF87a") or
+        std.mem.startsWith(u8, bytes, "GIF89a");
+    if (!gif) return true; // APNG and WebP declare animation in their headers.
+    if (bytes.len < 13) return false;
+    var at: usize = 13;
+    if (bytes[10] & 0x80 != 0) at += palette_size(bytes[10]);
+    var images: u32 = 0;
+    while (at < bytes.len) {
+        const marker = bytes[at];
+        at += 1;
+        switch (marker) {
+            0x3b => return false,
+            0x21 => {
+                if (at == bytes.len) return false;
+                at += 1; // extension label; payload is length-prefixed subblocks
+            },
+            0x2c => {
+                if (bytes.len - at < 9) return false;
+                images += 1;
+                if (images == 2) return true;
+                const flags = bytes[at + 8];
+                at += 9;
+                if (flags & 0x80 != 0) at += palette_size(flags);
+                if (at >= bytes.len) return false;
+                at += 1; // LZW minimum code size
+            },
+            else => return false,
+        }
+        at = skip_subblocks(bytes, at) orelse return false;
+    }
+    return false;
+}
+
+fn palette_size(flags: u8) usize {
+    return @as(usize, 3) << @as(u4, @intCast((flags & 7) + 1));
+}
+
+fn skip_subblocks(bytes: []const u8, start: usize) ?usize {
+    var at = start;
+    while (at < bytes.len) {
+        const n = bytes[at];
+        at += 1;
+        if (n == 0) return at;
+        if (bytes.len - at < n) return null;
+        at += n;
+    }
+    return null;
+}
+
 const Decoder = union(enum) {
     none,
     wuffs: wuffs.Animation,

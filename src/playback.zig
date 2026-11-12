@@ -14,7 +14,9 @@ pub fn play(s: *State, bytes: []const u8) bool {
     if (!s.settings.animation) return false;
     const found = animation.detect(bytes) orelse return false;
     if (found.too_large()) {
-        s.notify("Too large to animate: showing the first frame", .{});
+        if (animation.multiple_frames(bytes)) {
+            s.notify("Too large to animate: showing the first frame", .{});
+        }
         return false;
     }
     s.player.start(bytes, found) catch |err| {
