@@ -67,6 +67,10 @@ pub fn MenuItem(comptime Item: type) type {
         /// Called before its submenu shows (a menu bar menu, a lazy one):
         /// fill it with `Item.setSubmenu`, refresh titles and checks.
         on_open: ?Click(Item) = null,
+        /// On a submenu: its items show their accelerators but never take
+        /// the keys, which go on to the view. For an app whose view runs
+        /// its own keys, so that a key runs its command once.
+        accelerators_shown_only: bool = false,
         /// Shown in place of the item before it while Option is held.
         alternate: bool = false,
         /// An SF Symbol's name, or a picture's PNG bytes shown at 16 pt (a favicon).

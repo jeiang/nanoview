@@ -21,6 +21,8 @@ pub const Item = struct {
     click: ?Click,
     role: ?Role,
     accel: menu_types.Accelerator,
+    /// In a submenu whose accelerators are shown only: `match` skips it.
+    shown_only: bool = false,
 
     pub fn setChecked(self: *Item, on: bool) void {
         self.checked = on;
@@ -43,15 +45,15 @@ pub const Menu = struct {
         const m = try gpa.create(Menu);
         m.* = .{ .gpa = gpa };
         errdefer m.destroy();
-        try m.add(template);
+        try m.add(template, false);
         return m;
     }
 
-    fn add(m: *Menu, template: []const MenuItem) !void {
+    fn add(m: *Menu, template: []const MenuItem, shown_only: bool) !void {
         for (template) |t| {
             if (t.is_separator or t.hidden) continue;
             if (t.submenu) |sub| {
-                try m.add(sub);
+                try m.add(sub, shown_only or t.accelerators_shown_only);
                 continue;
             }
             try m.items.append(m.gpa, .{
@@ -63,6 +65,7 @@ pub const Menu = struct {
                 .click = t.click,
                 .role = t.role,
                 .accel = parseAccelerator(t.accelerator),
+                .shown_only = shown_only,
             });
         }
     }
@@ -81,7 +84,7 @@ pub const Menu = struct {
     pub fn match(m: *Menu, sc: ui.Shortcut) ?*Item {
         for (m.items.items) |*it| {
             const a = it.accel;
-            if (a.key == 0 or it.disabled) continue;
+            if (a.key == 0 or it.disabled or it.shown_only) continue;
             // Cmd (CmdOrCtrl) and Ctrl are both Ctrl on Linux.
             const ctrl = a.mods & (menu_types.mod_cmd | menu_types.mod_ctrl) != 0;
             const shift = a.mods & menu_types.mod_shift != 0;
@@ -121,6 +124,21 @@ test "an accelerator matches its modifiers, and a disabled item matches nothing"
     try testing.expect(m.match(.{ .key = ui.Shortcut.left, .ctrl = true }) == null);
     // A disabled item never matches, and neither does an unbound key.
     try testing.expect(m.match(.{ .key = @as(u21, @intCast('2')) }) == null);
+}
+
+test "a submenu whose accelerators are shown only matches nothing" {
+    const testing = std.testing;
+    const m = try Menu.create(testing.allocator, &.{
+        .{ .label = "View", .accelerators_shown_only = true, .submenu = &.{
+            .{ .id = "zoom", .label = "Zoom", .accelerator = "CmdOrCtrl+Plus" },
+            .{ .label = "More", .submenu = &.{.{ .id = "deep", .label = "Deep", .accelerator = "F3" }} },
+        } },
+        .{ .label = "File", .submenu = &.{.{ .id = "open", .label = "Open", .accelerator = "CmdOrCtrl+O" }} },
+    });
+    defer m.destroy();
+    try testing.expect(m.match(.{ .key = '+', .ctrl = true }) == null);
+    try testing.expect(m.match(.{ .key = ui.Shortcut.f(3) }) == null);
+    try testing.expectEqualStrings("open", m.match(.{ .key = 'o', .ctrl = true }).?.id);
 }
 
 test "activating a checkbox toggles it and a radio sets it, then clicks" {

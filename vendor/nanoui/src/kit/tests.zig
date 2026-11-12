@@ -183,6 +183,46 @@ test "a menu picks an item; a click elsewhere closes it; a tooltip waits" {
     try testing.expect(t.hasText("Adds one"));
 }
 
+const Nested = struct {
+    open: bool = true,
+    choice: ?kit.MenuChoice = null,
+
+    fn view(n: *Nested, c: *ui.Context) void {
+        const root = ui.div(c).sizeFull().bg(c.theme.background);
+        defer root.end();
+        const share = [_]kit.MenuItem{ .{ .label = "Mail" }, .{ .label = "Messages" } };
+        const items = [_]kit.MenuItem{ .{ .label = "Open" }, .{ .label = "Share", .items = &share }, .{ .label = "Close" } };
+        if (kit.menuChoice(c, "menu", &n.open, .{ .x = 20, .y = 20, .w = 0, .h = 0 }, &items, .{ .row_height = 24 })) |ch| n.choice = ch;
+    }
+};
+
+test "a submenu comes out beside its item and reports its choice" {
+    var n: Nested = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&n, Nested.view), .{ .width = 600, .height = 400 });
+    defer t.deinit();
+    t.settle(1);
+    try testing.expect(!t.hasText("Mail"));
+    const share = t.findText("Share").?;
+    t.moveTo(share.x + 2, share.y + 2);
+    t.settle(1);
+    const mail = t.findText("Mail").?;
+    try testing.expect(mail.x > share.x + 150 and @abs(mail.y - share.y) < 2);
+    // Onto another item: the submenu goes in.
+    const open = t.findText("Open").?;
+    t.moveTo(open.x + 2, open.y + 2);
+    t.settle(1);
+    try testing.expect(!t.hasText("Mail"));
+    try t.clickText("Share");
+    t.settle(1);
+    try testing.expect(n.open and n.choice == null);
+    try t.clickText("Messages");
+    t.settle(1);
+    try testing.expectEqual(@as(usize, 1), n.choice.?.index);
+    try testing.expectEqual(@as(?usize, 1), n.choice.?.sub);
+    try testing.expect(!n.open and !t.hasText("Share"));
+}
+
 test "toasts come and go; a collapsible opens to its content's height; a select moves with the keys" {
     var a: App = undefined;
     var t: ui.Tester = undefined;

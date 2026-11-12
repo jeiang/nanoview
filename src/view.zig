@@ -14,6 +14,7 @@ const exif = @import("exif.zig");
 const playback = @import("playback.zig");
 const pages = @import("pages.zig");
 const save = @import("save.zig");
+const menus = @import("menus.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -28,6 +29,8 @@ pub fn view(s: *State, c: *ui.Context) void {
     });
     c.wants_wheel = true;
     c.wants_moves = c.input.down;
+    menus.run_menu_bar(s, c);
+    menus.context_request(s, c);
     keys(s, c);
     slideshow(s, c);
     if (playback.tick(s, c.time)) |wait| c.frameIn(wait);
@@ -38,6 +41,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     body(s, c);
     message(s, c);
     rename_field(s, c);
+    menus.context_menu(s, c);
     s.update_title();
 }
 
@@ -377,6 +381,11 @@ fn pointer(s: *State, c: *ui.Context) void {
     assert(s.status == .shown);
     const in = &c.input;
     const vp = &s.viewport;
+    // Keys and drags stay off the picture while the context menu is open.
+    if (s.context_menu.open) {
+        s.drag_last = null;
+        return;
+    }
     if (in.pressed and (in.button == .back or in.button == .forward)) {
         perform(s, c, if (in.button == .back) .previous else .next);
         return;
@@ -469,7 +478,7 @@ fn function_key(key: u21) ?NamedKey {
 /// while it is open.
 fn keys(s: *State, c: *ui.Context) void {
     assert(s.path_len <= paths.path_max);
-    if (s.rename_open) return;
+    if (s.rename_open or s.context_menu.open) return;
     for (s.keymap.slice()) |b| {
         if (!key_hit(c, b.shortcut)) continue;
         perform(s, c, b.action);

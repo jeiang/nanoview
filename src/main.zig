@@ -42,6 +42,10 @@ pub fn main(init: std.process.Init) !void {
     // Before the window: a process that hands its files over shows none.
     if (state.settings.single_instance and instance.hand_over(init.io, files[0..count])) return;
     load_recent(init);
+    // Elsewhere nanoui would add its roles' keys (Ctrl+Q): no menu bar.
+    if (builtin.os.tag == .macos) app.setMenu(@import("menus.zig").menu_bar(&state)) catch |err| {
+        state.notify("Menu bar: {s}", .{@errorName(err)});
+    };
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{
         .title = "nanoview",

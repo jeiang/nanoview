@@ -148,6 +148,8 @@ pub const State = struct {
     page: u32 = 0, // of a multi-page file; nonzero pages decode into `current_pixels`
     page_count: u32 = 1,
     png: png_save.Encoder = undefined, // save frame as PNG
+    context_menu: @import("menus.zig").ContextMenu = .{},
+    menu_bar: @import("menus.zig").MenuBar = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.

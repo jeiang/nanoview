@@ -41,6 +41,9 @@ pub const popover = overlay.popover;
 pub const Popover = overlay.Popover;
 pub const menu = overlay.menu;
 pub const MenuItem = overlay.MenuItem;
+pub const menuChoice = overlay.menuChoice;
+pub const MenuChoice = overlay.MenuChoice;
+pub const MenuOptions = overlay.MenuOptions;
 
 const dialog_mod = @import("dialog.zig");
 pub const dialog = dialog_mod.dialog;

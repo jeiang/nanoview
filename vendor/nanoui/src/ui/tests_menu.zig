@@ -64,3 +64,43 @@ test "on_open fills the submenu before it shows" {
     const ns = m.item("recent").?.ns;
     try testing.expectEqualStrings("h", objc.fromNSString(objc.msg(?objc.Object, ns, "keyEquivalent", .{})));
 }
+
+const Clicks = struct {
+    n: u32 = 0,
+    fn click(s: *Clicks, _: *menu.Item) void {
+        s.n += 1;
+    }
+};
+
+/// ⌘ and a key, as AppKit offers it to the menu bar first.
+fn commandKey(chars: []const u8) objc.Object {
+    const key_down: objc.NSUInteger = 10;
+    const command: objc.NSUInteger = 1 << 20;
+    return objc.msg(objc.Object, objc.class("NSEvent"), "keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:", .{
+        key_down, objc.CGPoint{}, command, @as(f64, 0), @as(objc.NSInteger, 0), @as(?objc.Object, null), objc.nsString(chars), objc.nsString(chars), objc.NO, @as(u16, 0),
+    });
+}
+
+test "a submenu whose accelerators are shown only shows them and takes no keys" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    var opened: Clicks = .{};
+    var rotated: Clicks = .{};
+    const m = try menu.Menu.create(testing.allocator, "Test", &.{
+        .{ .label = "File", .submenu = &.{.{ .label = "Open", .id = "open", .accelerator = "Cmd+O", .click = .of(&opened, Clicks.click) }} },
+        .{ .label = "View", .accelerators_shown_only = true, .submenu = &.{
+            .{ .label = "Rotate", .id = "rotate", .accelerator = "Cmd+K", .click = .of(&rotated, Clicks.click) },
+            .{ .label = "More", .submenu = &.{.{ .label = "Deep", .id = "deep", .accelerator = "Cmd+J", .click = .of(&rotated, Clicks.click) }} },
+        } },
+    });
+    defer m.destroy();
+    try testing.expect(objc.msg(objc.BOOL, m.ns, "performKeyEquivalent:", .{commandKey("k")}) == objc.NO);
+    try testing.expect(objc.msg(objc.BOOL, m.ns, "performKeyEquivalent:", .{commandKey("j")}) == objc.NO);
+    try testing.expectEqual(@as(u32, 0), rotated.n);
+    const ns = m.item("rotate").?.ns;
+    try testing.expectEqualStrings("k", objc.fromNSString(objc.msg(?objc.Object, ns, "keyEquivalent", .{})));
+    // Other menus take theirs.
+    try testing.expect(objc.msg(objc.BOOL, m.ns, "performKeyEquivalent:", .{commandKey("o")}) == objc.YES);
+    try testing.expectEqual(@as(u32, 1), opened.n);
+}

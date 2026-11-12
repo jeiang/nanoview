@@ -1,6 +1,7 @@
-//! Every command a key can run, and the keys that run them. `view.perform`
-//! carries each one out.
+//! Every command a key can run, the keys that run them, and how menus show
+//! them. `view.perform` carries each one out.
 const std = @import("std");
+const builtin = @import("builtin");
 const ui = @import("nanoui").ui;
 
 pub const Action = enum {
@@ -46,6 +47,95 @@ pub const Action = enum {
     previous_page,
     save_frame,
 };
+
+/// The menus, in menu bar order.
+pub const Group = enum {
+    file,
+    edit,
+    view,
+    go,
+
+    pub fn title(g: Group) []const u8 {
+        return switch (g) {
+            .file => "File",
+            .edit => "Edit",
+            .view => "View",
+            .go => "Go",
+        };
+    }
+};
+
+/// What an action needs to do something: menus leave out or disable the rest.
+pub const Needs = enum {
+    nothing,
+    /// A picture on screen, a file or a pasted one.
+    picture,
+    /// A picture that is a file.
+    file,
+    /// Other pictures in its folder to step to.
+    folder,
+};
+
+pub const Info = struct {
+    title: []const u8,
+    group: Group,
+    needs: Needs = .picture,
+    /// A separator comes before it when its menu shows anything before it.
+    section: bool = false,
+};
+
+const trash_title = if (builtin.os.tag == .windows) "Move to Recycle Bin" else "Move to Trash";
+const reveal_title = switch (builtin.os.tag) {
+    .macos => "Show in Finder",
+    .windows => "Show in Explorer",
+    else => "Show in Folder",
+};
+
+/// Each action's menu title and place; menus list a group's actions in
+/// enum order. `EnumArray.init` makes leaving one out a compile error.
+pub const infos = std.enums.EnumArray(Action, Info).init(.{
+    .open = .{ .title = "Open…", .group = .file, .needs = .nothing },
+    .next = .{ .title = "Next Picture", .group = .go, .needs = .folder },
+    .previous = .{ .title = "Previous Picture", .group = .go, .needs = .folder },
+    .first = .{ .title = "First Picture", .group = .go, .needs = .folder, .section = true },
+    .last = .{ .title = "Last Picture", .group = .go, .needs = .folder },
+    .random = .{ .title = "Random Picture", .group = .go, .needs = .folder },
+    .reload = .{ .title = "Reload", .group = .file, .needs = .file },
+    .slideshow = .{ .title = "Slideshow", .group = .go, .needs = .folder, .section = true },
+    .zoom_in = .{ .title = "Zoom In", .group = .view },
+    .zoom_out = .{ .title = "Zoom Out", .group = .view },
+    .fit = .{ .title = "Fit to Window", .group = .view },
+    .actual = .{ .title = "Actual Size", .group = .view },
+    .fit_upscale = .{ .title = "Fit Enlarges Small Pictures", .group = .view, .section = true },
+    .fit_mode = .{ .title = "Next Fit Mode", .group = .view },
+    .smooth = .{ .title = "Smooth Pixels", .group = .view },
+    .zoom_lock = .{ .title = "Zoom Lock", .group = .view },
+    .checkerboard = .{ .title = "Checkerboard", .group = .view },
+    .full_screen = .{ .title = "Full Screen", .group = .view, .needs = .nothing, .section = true },
+    .always_on_top = .{ .title = "Always on Top", .group = .view, .needs = .nothing },
+    .leave_full_screen = .{ .title = "Leave Full Screen", .group = .view, .needs = .nothing },
+    .rotate_right = .{ .title = "Rotate Right", .group = .view, .section = true },
+    .rotate_left = .{ .title = "Rotate Left", .group = .view },
+    .mirror = .{ .title = "Mirror", .group = .view },
+    .flip = .{ .title = "Flip", .group = .view },
+    .info = .{ .title = "Show Info", .group = .view, .section = true },
+    .trash = .{ .title = trash_title, .group = .file, .needs = .file, .section = true },
+    .confirm_trash = .{ .title = "Confirm " ++ trash_title, .group = .file, .needs = .file },
+    .restore = .{ .title = "Put Back", .group = .edit, .needs = .nothing },
+    .reveal = .{ .title = reveal_title, .group = .file, .needs = .file, .section = true },
+    .copy_path = .{ .title = "Copy Path", .group = .edit, .needs = .file, .section = true },
+    .copy_image = .{ .title = "Copy Picture", .group = .edit },
+    .paste = .{ .title = "Paste", .group = .edit, .needs = .nothing },
+    .rename = .{ .title = "Rename…", .group = .file, .needs = .file },
+    .details = .{ .title = "Show EXIF Details", .group = .view },
+    .pause = .{ .title = "Pause Animation", .group = .view, .section = true },
+    .next_frame = .{ .title = "Next Frame", .group = .view },
+    .slower = .{ .title = "Slower", .group = .view },
+    .faster = .{ .title = "Faster", .group = .view },
+    .next_page = .{ .title = "Next Page", .group = .go, .section = true },
+    .previous_page = .{ .title = "Previous Page", .group = .go },
+    .save_frame = .{ .title = "Save Frame As…", .group = .file },
+});
 
 pub const Binding = struct { shortcut: ui.Shortcut, action: Action };
 
@@ -114,4 +204,13 @@ test "every action has a key and no key runs two actions" {
         for (bindings[i + 1 ..]) |other| try std.testing.expect(!same(b.shortcut, other.shortcut));
     }
     for (bound) |has_key| try std.testing.expect(has_key);
+}
+
+test "every action has its own title" {
+    const all = std.enums.values(Action);
+    for (all, 0..) |a, i| {
+        const title = infos.get(a).title;
+        try std.testing.expect(title.len > 0);
+        for (all[i + 1 ..]) |b| try std.testing.expect(!std.mem.eql(u8, title, infos.get(b).title));
+    }
 }
