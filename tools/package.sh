@@ -40,7 +40,10 @@ done
 for target in x86_64-windows-gnu aarch64-windows-gnu; do
     prefix="zig-out/release/$target"
     zig build -Dtarget="$target" -Doptimize=ReleaseSafe --prefix "$prefix"
-    (cd "$prefix/bin" && zip -q "$OLDPWD/$dist/nanoview-$version-${target%-gnu}.zip" nanoview.exe)
+    # The notices of the bundled code go beside the program.
+    (cd "$prefix" && rm -rf bin/licenses && cp -R share/licenses/nanoview bin/licenses)
+    (cd "$prefix/bin" && zip -qr "$OLDPWD/$dist/nanoview-$version-${target%-gnu}.zip" \
+        nanoview.exe licenses)
 done
 
 (cd "$dist" && shasum -a 256 -- * > SHA256SUMS)

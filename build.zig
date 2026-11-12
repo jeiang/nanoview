@@ -57,6 +57,60 @@ fn add_decoders(b: *std.Build, module: *std.Build.Module) void {
     });
 }
 
+/// The notices the bundled code's licenses ask every binary copy to carry.
+const licenses = [_][]const u8{
+    "nanoui/LICENSE",
+    "wuffs/LICENSE",
+    "wuffs/LICENSE-MIT",
+    "wuffs/LICENSE-APACHE",
+    "libwebp/COPYING",
+    "libwebp/PATENTS",
+    "libwebp/AUTHORS",
+};
+
+fn install_licenses(b: *std.Build, step: *std.Build.Step, dest: []const u8) void {
+    for (licenses) |name| {
+        const from = b.path(b.pathJoin(&.{ "vendor", name }));
+        step.dependOn(&b.addInstallFile(from, b.pathJoin(&.{ dest, name })).step);
+    }
+}
+
+fn add_app_step(b: *std.Build, exe: *std.Build.Step.Compile) void {
+    const bundle_exe = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{
+        .custom = "nanoview.app/Contents/MacOS",
+    } } });
+    const plist_dest = "nanoview.app/Contents/Info.plist";
+    const plist = b.addInstallFile(b.path("macos/Info.plist"), plist_dest);
+    const icns_dest = "nanoview.app/Contents/Resources/AppIcon.icns";
+    const icns = b.addInstallFile(b.path("macos/AppIcon.icns"), icns_dest);
+    const app = b.step("app", "Build zig-out/nanoview.app");
+    app.dependOn(&bundle_exe.step);
+    app.dependOn(&plist.step);
+    app.dependOn(&icns.step);
+    install_licenses(b, app, "nanoview.app/Contents/Resources/licenses");
+}
+
+fn add_icon_step(b: *std.Build) void {
+    const icon = b.step("icon", "Redraw the icon: macos/, windows/ and linux/ (macOS host)");
+    if (b.graph.host.result.os.tag == .macos) {
+        const icon_exe = b.addExecutable(.{
+            .name = "icon",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/icon.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+                .link_libc = true, // erfc, for the shadow
+            }),
+        });
+        const icon_run = b.addRunArtifact(icon_exe);
+        // It writes the icon's files in the source tree.
+        icon_run.setCwd(b.path("."));
+        icon.dependOn(&icon_run.step);
+    } else {
+        icon.dependOn(&b.addFail("zig build icon runs on a Mac: it needs sips and iconutil").step);
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -98,38 +152,10 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run nanoview").dependOn(&run.step);
 
-    if (target.result.os.tag == .macos) {
-        const bundle_exe = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{
-            .custom = "nanoview.app/Contents/MacOS",
-        } } });
-        const plist_dest = "nanoview.app/Contents/Info.plist";
-        const plist = b.addInstallFile(b.path("macos/Info.plist"), plist_dest);
-        const icns_dest = "nanoview.app/Contents/Resources/AppIcon.icns";
-        const icns = b.addInstallFile(b.path("macos/AppIcon.icns"), icns_dest);
-        const app = b.step("app", "Build zig-out/nanoview.app");
-        app.dependOn(&bundle_exe.step);
-        app.dependOn(&plist.step);
-        app.dependOn(&icns.step);
-    }
+    install_licenses(b, b.getInstallStep(), "share/licenses/nanoview");
+    if (target.result.os.tag == .macos) add_app_step(b, exe);
 
-    const icon = b.step("icon", "Redraw the icon: macos/, windows/ and linux/ (macOS host)");
-    if (b.graph.host.result.os.tag == .macos) {
-        const icon_exe = b.addExecutable(.{
-            .name = "icon",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("tools/icon.zig"),
-                .target = b.graph.host,
-                .optimize = .ReleaseSafe,
-                .link_libc = true, // erfc, for the shadow
-            }),
-        });
-        const icon_run = b.addRunArtifact(icon_exe);
-        // It writes the icon's files in the source tree.
-        icon_run.setCwd(b.path("."));
-        icon.dependOn(&icon_run.step);
-    } else {
-        icon.dependOn(&b.addFail("zig build icon runs on a Mac: it needs sips and iconutil").step);
-    }
+    add_icon_step(b);
 
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
