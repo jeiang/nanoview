@@ -32,6 +32,21 @@ test "buffer edits" {
     try std.testing.expectEqual(@as(usize, 7), nextWord("foo bar", 3));
 }
 
+test "a fixed buffer keeps the app's storage and refuses what does not fit" {
+    var storage: [5]u8 = undefined;
+    var b = TextBuffer.initFixed(&storage);
+    defer b.deinit();
+    b.set("abc");
+    try std.testing.expectEqual(@as(usize, 2), b.insert(3, "de"));
+    try std.testing.expectEqualStrings("abcde", b.text());
+    try std.testing.expectEqual(@as(usize, 0), b.insert(5, "f"));
+    try std.testing.expectEqual(@as(usize, 1), b.replace(0, 3, "x"));
+    try std.testing.expectEqualStrings("xde", b.text());
+    try std.testing.expect(b.text().ptr == &storage);
+    b.deinit();
+    try std.testing.expect(b.fixed and b.text().len == 0);
+}
+
 fn noClip(_: ?*anyopaque, _: []const u8) void {}
 
 test "composition, selection, commands" {
