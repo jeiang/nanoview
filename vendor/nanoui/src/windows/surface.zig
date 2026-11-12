@@ -476,11 +476,12 @@ pub const Surface = struct {
                 self.ctx.pointerUp();
                 self.frame();
             },
-            0x020B, 0x020C => { // WM_XBUTTONDOWN / WM_XBUTTONUP
+            // WM_XBUTTONDOWN / WM_XBUTTONUP / WM_XBUTTONDBLCLK (CS_DBLCLKS).
+            0x020B, 0x020C, 0x020D => {
                 self.setMouse(lp);
                 self.ctx.input.button = if ((wp >> 16) & 0xffff == 1) .back else .forward;
                 self.ctx.updateHot();
-                if (msg == 0x020B) {
+                if (msg != 0x020C) {
                     _ = w.SetCapture(h);
                     self.ctx.pointerDown();
                 } else {
