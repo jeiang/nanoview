@@ -7,5 +7,5 @@ Exec=nanoview %f
 Icon=nanoview
 Terminal=false
 Categories=Graphics;Viewer;
-MimeType=image/png;image/jpeg;image/gif;
+MimeType=image/png;image/jpeg;image/gif;image/bmp;image/tiff;image/webp;image/x-icon;image/vnd.microsoft.icon;
 StartupWMClass=nanoview

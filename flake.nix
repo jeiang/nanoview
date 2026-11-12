@@ -111,6 +111,7 @@
               wrapProgram "$out/bin/nanoview" --prefix LD_LIBRARY_PATH : ${
                 lib.makeLibraryPath [
                   pkgs.gtk3
+                  pkgs.gdk-pixbuf
                   pkgs.libGL
                 ]
               }
@@ -158,6 +159,7 @@
             # nanoui loads GTK and OpenGL with dlopen at run time.
             LD_LIBRARY_PATH = lib.makeLibraryPath [
               pkgs.gtk3
+              pkgs.gdk-pixbuf
               pkgs.libGL
             ];
           }

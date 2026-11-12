@@ -11,15 +11,37 @@ pub const name_len_max: u32 = 255;
 /// Directory entries read per scan, pictures or not.
 const scan_entries_max: u32 = entries_max * 4;
 
-/// Lower case, without dots: what nanoui decodes on this system.
-pub const extensions: []const []const u8 = if (builtin.os.tag == .macos)
+/// Lower case, without dots. Initialized before folder scans or the worker start.
+pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
     &.{
         "png", "jpg",  "jpeg", "jpe", "jfif", "gif", "heic", "heif", "webp", "avif",
         "tif", "tiff", "bmp",  "ico", "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
         "pbm",
     }
+else if (builtin.os.tag == .windows)
+    &.{
+        "png",  "jpg",  "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp",
+        "heic", "heif", "avif", "jxl", "dds", "jxr", "wdp",
+    }
 else
-    &.{ "png", "jpg", "jpeg", "gif" };
+    baseline_extensions;
+
+const baseline_extensions: []const []const u8 = &.{ "png", "jpg", "jpeg", "gif" };
+const extensions_max: u32 = 64;
+var extension_table: [extensions_max][]const u8 = undefined;
+var extensions_initialized = false;
+
+pub fn init_extensions() void {
+    if (builtin.os.tag != .linux or extensions_initialized) return;
+    @memcpy(extension_table[0..baseline_extensions.len], baseline_extensions);
+    const count = @import("decode_linux.zig").extensions(
+        extension_table[baseline_extensions.len..],
+    );
+    extensions = extension_table[0 .. baseline_extensions.len + count];
+    extensions_initialized = true;
+    assert(extensions.len >= baseline_extensions.len);
+    assert(extensions.len <= extensions_max);
+}
 
 pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
 

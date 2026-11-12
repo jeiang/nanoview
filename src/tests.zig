@@ -17,6 +17,7 @@ test {
     _ = @import("sort_order.zig");
     _ = @import("explorer_sort.zig");
     _ = @import("actions.zig");
+    _ = @import("decode.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -26,6 +27,7 @@ const Fixture = struct {
     file_buffer: []u8,
     pool: []u8,
     scratch: []u8,
+    current_pixels: []u8,
     tester: ui.Tester = undefined,
     tmp: std.testing.TmpDir,
     dir_buf: [paths.path_max]u8 = undefined,
@@ -41,9 +43,11 @@ const Fixture = struct {
             .file_buffer = try app.alloc_pages(app.file_size_max),
             .pool = try app.alloc_pages(preload.pool_bytes),
             .scratch = try app.alloc_pages(if (preload.decoded) app.file_size_max else 0),
+            .current_pixels = try app.alloc_pages(app.current_pixels_max),
             .tmp = testing.tmpDir(.{}),
         };
-        state.init(testing.io, testing.allocator, f.file_buffer, f.pool, f.scratch);
+        const pixels = f.current_pixels;
+        state.init(testing.io, testing.allocator, f.file_buffer, f.pool, f.scratch, pixels);
         f.dir_len = try f.tmp.dir.realPathFile(testing.io, ".", &f.dir_buf);
         try f.tester.init(testing.allocator, .init(state, view.view), .{
             .width = 480,
@@ -58,6 +62,7 @@ const Fixture = struct {
         app.free_pages(f.file_buffer);
         app.free_pages(f.pool);
         app.free_pages(f.scratch);
+        app.free_pages(f.current_pixels);
         testing.allocator.destroy(f.state);
         testing.allocator.destroy(f);
     }
@@ -188,7 +193,12 @@ test "zooming past the preloaded pixels reads the file" {
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
     try testing.expect(f.state.source == .pixels);
     f.tester.pinch(240, 180, 8, 0, 0);
-    try testing.expect(f.state.source == .encoded);
+    if (@import("builtin").os.tag == .macos) {
+        try testing.expect(f.state.source == .encoded);
+    } else {
+        try testing.expect(f.state.source == .pixels);
+        try testing.expectEqual(f.state.source.pixels.native_w, f.state.source.pixels.width);
+    }
     try testing.expect(!f.state.viewport.fit);
 }
 
@@ -198,7 +208,8 @@ test "ImageIO formats display directly and from preloaded pixels" {
     inline for (formats) |format| {
         const f = try Fixture.create();
         defer f.destroy();
-        const fixture = comptime if (std.mem.eql(u8, format, "jpe") or std.mem.eql(u8, format, "jfif"))
+        const alias = comptime (std.mem.eql(u8, format, "jpe") or std.mem.eql(u8, format, "jfif"));
+        const fixture = if (alias)
             "jpeg"
         else
             format;
