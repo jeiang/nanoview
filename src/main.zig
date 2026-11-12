@@ -20,7 +20,9 @@ pub fn main(init: std.process.Init) !void {
     const scratch_len = if (preload.decoded) app_state.file_size_max else 0;
     const scratch = try app_state.alloc_pages(scratch_len);
     defer app_state.free_pages(scratch);
-    state.init(init.io, init.gpa, file_buffer, pool, scratch);
+    const current_pixels = try app_state.alloc_pages(app_state.current_pixels_max);
+    defer app_state.free_pages(current_pixels);
+    state.init(init.io, init.gpa, file_buffer, pool, scratch, current_pixels);
     load_settings(init);
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{

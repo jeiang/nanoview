@@ -148,6 +148,7 @@ fn preload_bounds(s: *State, c: *const ui.Context) void {
 /// Zoomed past the preloaded pixels, or the window grew.
 fn needs_promote(s: *const State, c: *const ui.Context) bool {
     const px = s.source.pixels;
+    if (px.width == px.native_w and px.height == px.native_h) return false;
     const vp = &s.viewport;
     const needed = @ceil(@max(vp.image_w, vp.image_h) * vp.scale * c.scale);
     const have: f32 = @floatFromInt(@max(px.width, px.height));

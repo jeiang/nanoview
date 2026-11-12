@@ -8,12 +8,18 @@ const viewport_mod = @import("viewport.zig");
 const orientation = @import("orientation.zig");
 const sort_order = @import("sort_order.zig");
 const preload_mod = @import("preload.zig");
+const decode = @import("decode.zig");
+const builtin = @import("builtin");
 const settings_mod = @import("settings.zig");
 const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
 const assert = std.debug.assert;
 
-pub const file_size_max: u32 = 256 * 1024 * 1024;
+pub const file_size_max = decode.file_size_max;
+pub const current_pixels_max: u32 = if (builtin.os.tag == .macos)
+    0
+else
+    decode.pixels_max * 4;
 pub const message_len_max: u32 = 512;
 
 /// Pages for the large buffers. Debug builds fill `alloc` results with
@@ -52,6 +58,7 @@ pub const State = struct {
     io: std.Io,
     gpa: std.mem.Allocator, // only for nanoui.dialog.open's result
     file_buffer: []u8, // file_size_max bytes, allocated once in main
+    current_pixels: []u8, // current_pixels_max bytes, allocated once at startup
     source: Source = .none,
     promote_failed: bool = false,
     window: ?*nanoui.Window = null, // null under ui.Tester
@@ -93,9 +100,17 @@ pub const State = struct {
         file_buffer: []u8,
         pool: []u8,
         scratch: []u8,
+        current_pixels: []u8,
     ) void {
         assert(file_buffer.len == file_size_max);
-        s.* = .{ .io = io, .gpa = gpa, .file_buffer = file_buffer };
+        assert(current_pixels.len == current_pixels_max);
+        folder_mod.init_extensions();
+        s.* = .{
+            .io = io,
+            .gpa = gpa,
+            .file_buffer = file_buffer,
+            .current_pixels = current_pixels,
+        };
         s.preload.init(io, &s.folder, pool, scratch);
         s.random_state = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
         if (s.random_state == 0) s.random_state = 1;
@@ -276,8 +291,8 @@ pub const State = struct {
 
     fn slot_source(s: *const State, n: u32) Source {
         const bytes = s.preload.slot_bytes_of(n);
-        if (!preload_mod.decoded) return .{ .encoded = bytes };
         const slot = s.preload.slots[n];
+        if (!preload_mod.decoded or slot.encoded) return .{ .encoded = bytes };
         assert(bytes.len == slot.width * slot.height * 4);
         return .{ .pixels = .{
             .bgra = bytes,
@@ -292,7 +307,11 @@ pub const State = struct {
     fn read_current(s: *State) void {
         assert(s.path_len > 0);
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
-            s.source = .{ .encoded = bytes };
+            s.source = s.decode_current(bytes) catch {
+                s.source = .none;
+                s.status = .failed;
+                return;
+            };
             s.status = .shown;
         } else |_| {
             s.source = .none;
@@ -300,16 +319,37 @@ pub const State = struct {
         }
     }
 
+    fn decode_current(s: *State, bytes: []const u8) !Source {
+        if (builtin.os.tag == .macos) return .{ .encoded = bytes };
+        const full = std.math.maxInt(u32);
+        const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
+            if (err == error.Unavailable) return .{ .encoded = bytes };
+            return err;
+        };
+        return .{ .pixels = .{
+            .bgra = s.current_pixels[0 .. size.width * size.height * 4],
+            .width = size.width,
+            .height = size.height,
+            .native_w = size.native_w,
+            .native_h = size.native_h,
+        } };
+    }
+
     /// The preloaded pixels are too small for the zoom: read the file and
     /// keep the viewport, generation and turns.
     pub fn promote(s: *State) void {
         assert(s.source == .pixels and !s.promote_failed);
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
-            s.source = .{ .encoded = bytes };
+            s.source = s.decode_current(bytes) catch {
+                s.promote_failed = true;
+                s.notify("Cannot show full resolution", .{});
+                return;
+            };
         } else |_| {
             s.promote_failed = true;
+            s.notify("Cannot show full resolution", .{});
         }
-        assert(s.source == .encoded or s.promote_failed);
+        assert(s.source != .none or s.promote_failed);
     }
 
     /// Rescanning preserves the filename, or the missing file's old position.

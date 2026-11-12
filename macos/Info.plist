@@ -29,7 +29,23 @@
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>public.image</string>
+				<string>public.png</string>
+				<string>public.jpeg</string>
+				<string>com.compuserve.gif</string>
+				<string>public.heic</string>
+				<string>public.heif</string>
+				<string>org.webmproject.webp</string>
+				<string>public.avif</string>
+				<string>public.tiff</string>
+				<string>com.microsoft.bmp</string>
+				<string>com.microsoft.ico</string>
+				<string>public.jpeg-2000</string>
+				<string>com.adobe.photoshop-image</string>
+				<string>com.apple.icns</string>
+				<string>com.truevision.tga-image</string>
+				<string>com.ilm.openexr-image</string>
+				<string>com.sgi.sgi-image</string>
+				<string>public.pbm</string>
 			</array>
 		</dict>
 	</array>
