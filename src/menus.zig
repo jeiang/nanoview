@@ -227,8 +227,8 @@ fn open_recent(s: *State, i: u32) void {
 }
 
 const group_count: u32 = std.enums.values(actions.Group).len;
-/// A group's actions, a separator before each, and Open Recent.
-const group_len_max: u32 = action_count * 2 + 1;
+/// A group's actions and separators, Open Recent, and standard Edit items.
+const group_len_max: u32 = action_count * 2 + 9;
 /// The window menu and the app menu, beside the groups.
 const bar_len_max: u32 = group_count + 2;
 /// "Ctrl+Alt+Shift+Cmd+" and a key of at most four bytes, or "Plus".
@@ -283,6 +283,22 @@ fn bar_group(
     items: *[group_len_max]nanoui.MenuItem,
 ) []const nanoui.MenuItem {
     var len: u32 = 0;
+    if (group == .edit) {
+        const editing = [_]nanoui.MenuItem{
+            .{ .role = .undo },
+            .{ .role = .redo },
+            .separator,
+            .{ .role = .cut },
+            .{ .role = .copy },
+            .{ .role = .paste, .label = "Paste Text" },
+            .{ .role = .select_all },
+            .separator,
+        };
+        for (editing) |item| {
+            items[len] = item;
+            len += 1;
+        }
+    }
     for (std.enums.values(Action)) |a| {
         const info = actions.infos.get(a);
         if (info.group != group) continue;

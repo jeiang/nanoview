@@ -14,6 +14,8 @@
 const std = @import("std");
 const objc = @import("objc.zig");
 
+extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
+
 const menu_types = @import("menu_types.zig");
 pub const Kind = menu_types.Kind;
 pub const Role = menu_types.Role;
@@ -170,6 +172,35 @@ pub const Menu = struct {
         return false;
     }
 
+    /// Only the focused nanoui picture/content view owns shown-only keys.
+    /// A native panel or a nanoui text field needs the responder chain's
+    /// standard Edit selectors instead.
+    fn viewOwnsKeys() bool {
+        const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+        const window = objc.msg(?objc.Object, app, "keyWindow", .{}) orelse return false;
+        const first = objc.msg(?objc.Object, window, "firstResponder", .{}) orelse return false;
+        const view_class = objc_getClass("NanoUIView") orelse return false;
+        if (!objc.msg(objc.BOOL, first, "isKindOfClass:", .{view_class})) return false;
+        const surface = objc.getZig(@import("ui/surface.zig").Surface, first) orelse return false;
+        return surface.window.nswindow == window and surface.ctx.focused_text == null;
+    }
+
+    /// While a text field or panel has the keyboard, only native selectors
+    /// may take these keys. Clear our equivalents for AppKit's search,
+    /// then restore the displayed keys before returning to the event loop.
+    fn textKeyEquivalent(self: *Menu, event: objc.Object) objc.BOOL {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        for (self.items.items) |x| if (x.shown_only) {
+            objc.msg(void, x.ns, "setKeyEquivalent:", .{objc.nsString("")});
+        };
+        defer for (self.items.items) |x| if (x.shown_only) {
+            var buf: [8]u8 = undefined;
+            objc.msg(void, x.ns, "setKeyEquivalent:", .{objc.nsString(x.accel.keyString(&buf))});
+        };
+        return objc.msgSuper(objc.BOOL, self.ns, objc.class("NSMenu"), "performKeyEquivalent:", .{event});
+    }
+
     /// Shows the menu as a context menu at `x`, `y` (points, top left) of
     /// `view`, until the user picks an item or dismisses it.
     pub fn popup(self: *Menu, view: objc.Object, x: f64, y: f64) void {
@@ -240,7 +271,7 @@ pub const Menu = struct {
             } else group = 0;
             const ns = makeItem(t, self.app_name);
             defer objc.release(ns);
-            const shown_only = if (parent) |p| p.shown_only else false;
+            const shown_only = t.role == null and t.selector == null and (if (parent) |p| p.shown_only else false);
             const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .selector = t.selector, .shown_only = shown_only, .accel = parseAccelerator(t.accelerator), .group = group, .parent = parent });
             objc.msg(void, menu, "addItem:", .{ns});
             if ((t.role == null and t.selector == null) or t.click != null) {
@@ -367,7 +398,10 @@ pub const parseAccelerator = menu_types.parseAccelerator;
 fn performKeyEquivalent(self_obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
     if (@import("ui/keys.zig").menu_key_equivalents_suspended) return objc.NO;
     // A key whose item only shows it goes on to the view.
-    if (objc.getZig(Menu, self_obj)) |m| if (m.showsOnly(event)) return objc.NO;
+    if (objc.getZig(Menu, self_obj)) |m| {
+        if (!Menu.viewOwnsKeys()) return m.textKeyEquivalent(event);
+        if (m.showsOnly(event)) return objc.NO;
+    }
     return objc.msgSuper(objc.BOOL, self_obj, objc.class("NSMenu"), "performKeyEquivalent:", .{event});
 }
 
