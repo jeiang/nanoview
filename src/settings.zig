@@ -240,5 +240,6 @@ test "loading a real settings file from an injected directory" {
     try testing.expectEqual(FitMode.height, settings.fit_mode);
     const huge: [file_size_max + 1]u8 = @splat(' ');
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "settings.conf", .data = &huge });
-    try testing.expectEqual(Reason.file_too_long, (try load(testing.io, directory[0..len], &settings)).?.reason);
+    const problem = (try load(testing.io, directory[0..len], &settings)).?;
+    try testing.expectEqual(Reason.file_too_long, problem.reason);
 }
