@@ -17,7 +17,7 @@ pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
         "png", "jpg",  "jpeg", "jpe",  "jfif", "gif", "heic", "heif", "webp", "avif",
         "tif", "tiff", "bmp",  "ico",  "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
         "pbm", "jxl",  "mpo",  "pict", "pct",  "dng", "cr3",  "rw2",  "rwl",  "3fr",
-        "qoi",
+        "qoi", "arw",  "erf",  "fff",  "nef",  "nrw", "pef",  "sr2",  "srf",
     }
 else
     always_extensions;

@@ -54,6 +54,14 @@
 				<string>com.panasonic.rw2-raw-image</string>
 				<string>com.leica.rwl-raw-image</string>
 				<string>com.hasselblad.3fr-raw-image</string>
+				<string>com.sony.arw-raw-image</string>
+				<string>com.sony.sr2-raw-image</string>
+				<string>com.sony.raw-image</string>
+				<string>com.nikon.raw-image</string>
+				<string>com.nikon.nrw-raw-image</string>
+				<string>com.pentax.raw-image</string>
+				<string>com.epson.raw-image</string>
+				<string>com.hasselblad.fff-raw-image</string>
 			</array>
 		</dict>
 	</array>
