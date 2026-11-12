@@ -114,14 +114,59 @@ pub const clipboard = struct {
         return 0;
     }
 
-    /// Images on the clipboard: not read here yet.
-    pub fn readImage(_: std.mem.Allocator) !?[]u8 {
-        return null;
+    /// The image on the clipboard, or null when it holds none. Caller
+    /// frees it. Apps that copy PNG ("PNG", as browsers and Office do) give
+    /// that; otherwise the DIB becomes a BMP file. Either one WIC decodes.
+    pub fn readImage(gpa: std.mem.Allocator) !?[]u8 {
+        if (w.OpenClipboard(null) == 0) return null;
+        defer _ = w.CloseClipboard();
+        const png = w.RegisterClipboardFormatW(std.unicode.utf8ToUtf16LeStringLiteral("PNG"));
+        if (png != 0) {
+            if (w.GetClipboardData(png)) |mem| {
+                const bytes = locked(mem) orelse return null;
+                defer _ = w.GlobalUnlock(mem);
+                return try gpa.dupe(u8, bytes);
+            }
+        }
+        const mem = w.GetClipboardData(CF_DIBV5) orelse w.GetClipboardData(CF_DIB) orelse return null;
+        const bytes = locked(mem) orelse return null;
+        defer _ = w.GlobalUnlock(mem);
+        const header = dib.fileHeader(bytes) orelse return null;
+        const out = try gpa.alloc(u8, header.len + bytes.len);
+        @memcpy(out[0..header.len], &header);
+        @memcpy(out[header.len..], bytes);
+        return out;
     }
 
-    /// Files on the clipboard: not read here yet.
-    pub fn readFiles(_: std.mem.Allocator) !?[][]u8 {
-        return null;
+    /// The paths of the files on the clipboard (copied in Explorer), or
+    /// null when it holds none. Free with `dialog.freePaths`.
+    pub fn readFiles(gpa: std.mem.Allocator) !?[][]u8 {
+        if (w.OpenClipboard(null) == 0) return null;
+        defer _ = w.CloseClipboard();
+        const hdrop: w.HDROP = @ptrCast(w.GetClipboardData(CF_HDROP) orelse return null);
+        const count = w.DragQueryFileW(hdrop, 0xFFFF_FFFF, null, 0);
+        var out: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (out.items) |p| gpa.free(p);
+            out.deinit(gpa);
+        }
+        var units: [32768]u16 = undefined;
+        for (0..count) |i| {
+            const n = w.DragQueryFileW(hdrop, @intCast(i), &units, units.len);
+            if (n == 0 or n >= units.len) continue;
+            try out.append(gpa, try std.unicode.utf16LeToUtf8Alloc(gpa, units[0..n]));
+        }
+        if (out.items.len == 0) {
+            out.deinit(gpa);
+            return null;
+        }
+        return try out.toOwnedSlice(gpa);
+    }
+
+    /// A clipboard block's bytes, locked: unlock with `GlobalUnlock`.
+    fn locked(mem: *anyopaque) ?[]const u8 {
+        const p: [*]const u8 = @ptrCast(w.GlobalLock(mem) orelse return null);
+        return p[0..w.GlobalSize(mem)];
     }
 };
 
