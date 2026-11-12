@@ -79,6 +79,8 @@ pub const Settings = struct {
     /// `hidden` draws content under the title bar where nanoui can.
     title_bar: TitleBar = .default,
     always_on_top: bool = false,
+    /// Keep a list of recently opened files.
+    recent: bool = true,
 };
 
 pub const Reason = enum {
@@ -277,6 +279,7 @@ test "all settings parse with whitespace comments and blank lines" {
         \\title = full
         \\title_bar = hidden
         \\always_on_top = true
+        \\recent = false
         \\
     , &settings) == null);
     try testing.expectEqualDeep(Settings{
@@ -300,6 +303,7 @@ test "all settings parse with whitespace comments and blank lines" {
         .title = .full,
         .title_bar = .hidden,
         .always_on_top = true,
+        .recent = false,
     }, settings);
     const tail = "\tzoom_step_percent = 1\r\nslideshow_seconds=1\nbackground=theme";
     try testing.expect(parse_plain(tail, &settings) == null);

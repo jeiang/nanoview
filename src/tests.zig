@@ -20,6 +20,7 @@ test {
     _ = @import("actions.zig");
     _ = @import("settings.zig");
     _ = @import("keymap.zig");
+    _ = @import("recent.zig");
     _ = @import("decode.zig");
 }
 
@@ -610,4 +611,32 @@ test "the sort setting orders the folder" {
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(5) });
     try testing.expectEqual(@as(u32, 3), f.state.folder.count);
     try testing.expectEqualStrings("a.png", f.state.folder.name(f.state.index.?));
+}
+
+test "opening a picture records it in the recent file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 4, 4);
+    var buf: [paths.path_max]u8 = undefined;
+    const state_dir = paths.join(f.dir_buf[0..f.dir_len], "state", &buf).?;
+    f.state.load_recent(state_dir);
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try f.open("b.png");
+    try testing.expectEqual(@as(u32, 2), f.state.recent_count());
+    try testing.expect(std.mem.endsWith(u8, f.state.recent(0).?, "b.png"));
+    try testing.expect(std.mem.endsWith(u8, f.state.recent(1).?, "a.png"));
+    try testing.expect(f.state.recent(2) == null);
+    var bytes: [2 * paths.path_max]u8 = undefined;
+    const saved = try f.tmp.dir.readFile(testing.io, "state/recent", &bytes);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, saved, "\n"));
+    f.state.clear_recent();
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
+    const cleared = try f.tmp.dir.readFile(testing.io, "state/recent", &bytes);
+    try testing.expectEqual(@as(usize, 0), cleared.len);
+    f.state.settings.recent = false;
+    try f.open("a.png");
+    try testing.expectEqual(@as(u32, 0), f.state.recent_count());
 }

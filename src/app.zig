@@ -14,6 +14,7 @@ const settings_mod = @import("settings.zig");
 const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
 const keymap_mod = @import("keymap.zig");
+const recent_mod = @import("recent.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -97,6 +98,10 @@ pub const State = struct {
     title_len: u32 = 0,
     window_fitted: bool = false, // the window took a picture's size since launch
     sort_fallback_told: bool = false,
+    recent_list: recent_mod.List = .{},
+    recent_dir_buf: [paths.path_max]u8 = undefined,
+    recent_dir_len: u32 = 0, // 0: the list stays in memory
+    recent_failed: bool = false,
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -137,6 +142,55 @@ pub const State = struct {
         } else {
             s.notify("settings.conf line {d}: {s}", .{ p.line, p.reason.text() });
         }
+    }
+
+    /// Called once at startup, after the settings: `recent = false` reads nothing.
+    pub fn load_recent(s: *State, directory: []const u8) void {
+        assert(directory.len > 0);
+        if (!s.settings.recent) return;
+        if (directory.len > paths.path_max) {
+            s.notify("Recent files: directory name too long", .{});
+            return;
+        }
+        @memcpy(s.recent_dir_buf[0..directory.len], directory);
+        s.recent_dir_len = @intCast(directory.len);
+        recent_mod.load(s.io, directory, &s.recent_list) catch |err| {
+            s.notify("Could not read recent files: {s}", .{@errorName(err)});
+        };
+    }
+
+    /// Newest first; null past the end.
+    pub fn recent(s: *const State, i: u32) ?[]const u8 {
+        return s.recent_list.get(i);
+    }
+
+    pub fn recent_count(s: *const State) u32 {
+        assert(s.recent_list.count <= recent_mod.recent_max);
+        return s.recent_list.count;
+    }
+
+    pub fn clear_recent(s: *State) void {
+        s.recent_list.clear();
+        if (s.settings.recent) s.save_recent();
+        assert(s.recent_count() == 0);
+    }
+
+    /// A file or folder the user opened.
+    fn remember(s: *State, opened: []const u8) void {
+        assert(opened.len > 0);
+        if (!s.settings.recent) return;
+        s.recent_list.insert(opened);
+        s.save_recent();
+    }
+
+    fn save_recent(s: *State) void {
+        if (s.recent_dir_len == 0) return;
+        const directory = s.recent_dir_buf[0..s.recent_dir_len];
+        recent_mod.save(s.io, directory, &s.recent_list) catch |err| {
+            if (s.recent_failed) return;
+            s.recent_failed = true;
+            s.notify("Could not save recent files: {s}", .{@errorName(err)});
+        };
     }
 
     pub fn path(s: *const State) []const u8 {
@@ -214,6 +268,7 @@ pub const State = struct {
             s.index = s.folder.find(s.basename());
             s.load();
         }
+        if (s.status == .shown) s.remember(if (directory) s.dir() else s.path());
     }
 
     fn directory_mtime(s: *State) i128 {
