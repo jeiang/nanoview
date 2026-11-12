@@ -209,7 +209,7 @@ pub fn page_count(encoded: []const u8) u32 {
     const data = CFDataCreateWithBytesNoCopy(null, encoded.ptr, len, kCFAllocatorNull) orelse
         return 1;
     defer CFRelease(data);
-    const src = CGImageSourceCreateWithData(data, null) orelse return 1;
+    const src = create_source(data) orelse return 1;
     defer CFRelease(src);
     return count_of(src);
 }

@@ -1477,3 +1477,64 @@ test "save frame writes the shown frame unrotated and it reads back the same" {
     f.tester.frame();
     try testing.expect(f.tester.containsText("Cannot save the frame"));
 }
+
+test "a finished play-once GIF restarts and stepping shows paused" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const once = comptime anim_fixtures.gif(1, 1, .{
+        .{ 255, 0, 0 }, .{ 0, 255, 0 }, .{ 0, 0, 255 }, .{ 0, 0, 0 },
+    }, null, &.{ gif_dot(&.{0}, 10), gif_dot(&.{1}, 10) });
+    try write_file(f, "once.gif", once);
+    try f.open("once.gif");
+    f.tester.advance(0.4);
+    try testing.expect(f.state.player.finished);
+    _ = f.tester.shortcut(.{ .key = 'k' });
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    f.tester.advance(0.15);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+    f.tester.advance(0.2);
+    try testing.expect(f.state.player.finished);
+    _ = f.tester.shortcut(.{ .key = '.' });
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    try testing.expect(f.tester.containsText("frame 1/2, paused"));
+}
+
+test "save failure cannot truncate an existing destination" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 3);
+    try f.open("a.png");
+    try write_file(f, "existing.png", "original bytes");
+    var buf: [paths.path_max]u8 = undefined;
+    const target = saved_path(f, "existing.png", &buf);
+    // Existing file is writable, but the directory cannot create the temporary PNG.
+    try f.tmp.dir.setPermissions(testing.io, .fromMode(0o500));
+    defer f.tmp.dir.setPermissions(testing.io, .fromMode(0o700)) catch unreachable;
+    save_mod.save_to(f.state, target);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Cannot save the frame"));
+    var back: [64]u8 = undefined;
+    const bytes = try f.tmp.dir.readFile(testing.io, "existing.png", &back);
+    try testing.expectEqualStrings("original bytes", bytes);
+}
+
+test "an oversized single-frame GIF does not warn about animation" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const palette = .{ .{ 255, 0, 0 }, .{ 0, 255, 0 }, .{ 0, 0, 255 }, .{ 0, 0, 0 } };
+    const single = comptime anim_fixtures.gif(4097, 4096, palette, null, &.{gif_dot(&.{0}, 10)});
+    const multi = comptime anim_fixtures.gif(4097, 4096, palette, null, &.{
+        gif_dot(&.{0}, 10), gif_dot(&.{1}, 10),
+    });
+    const playback = @import("playback.zig");
+    try testing.expect(!animation.multiple_frames(single));
+    try testing.expect(animation.multiple_frames(multi));
+    for (6..single.len) |n| try testing.expect(!animation.multiple_frames(single[0..n]));
+    try testing.expect(!playback.play(f.state, single));
+    try testing.expectEqual(@as(u32, 0), f.state.message_len);
+    try testing.expect(!playback.play(f.state, multi));
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Too large to animate"));
+}
