@@ -37,7 +37,7 @@ fn load() bool {
             _ = std.c.dlclose(lib);
             return false;
         };
-        @field(api, name) = @ptrCast(symbol);
+        @field(api, name) = @ptrCast(@alignCast(symbol));
     }
     loaded = true;
     return true;
