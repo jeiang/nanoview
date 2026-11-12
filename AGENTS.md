@@ -1,8 +1,16 @@
 # nanoview agent guide
 
 nanoview is a small qView-style image viewer in Zig 0.17.1. Its only dependency is
-[nanoui](https://github.com/justrach/nanoui) v0.14.0 (pinned in `build.zig.zon`). macOS is the
+[nanoui](https://github.com/justrach/nanoui) v0.14.0, vendored in `vendor/nanoui`. macOS is the
 main target; Linux and Windows build from the same code.
+
+## Vendored nanoui
+
+`vendor/nanoui` is the package tree of nanoui v0.14.0 (commit `7b32272`) as `zig fetch` unpacks
+it. nanoview's patches are ordinary commits that touch only `vendor/nanoui`, with the scope
+`nanoui` (`fix(nanoui): ...`), so `git log -- vendor/nanoui` lists what to send upstream and
+`git diff <vendoring commit> -- vendor/nanoui` is the whole patch. Keep nanoui's own style in
+that tree; the Tiger Style rules below and `zig fmt --check` cover `src/` and `build.zig` only.
 
 ## Environment
 
@@ -32,6 +40,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/main.zig` | Startup: buffers, window, worker thread, first argument |
 | `src/app.zig` | `State` and commands: open, step, trash, reveal, promote |
 | `src/view.zig` | Per-frame UI: keys, pointer, drops, drawing, window fit |
+| `src/actions.zig` | The `Action` list and the default keys; `view.perform` runs them |
 | `src/viewport.zig` | Zoom, pan, fit and the visible part of a rotated picture |
 | `src/folder.zig` | Folder listing, natural and Finder-style sorting |
 | `src/preload.zig` | Worker that preloads neighbors into a fixed pool |
@@ -71,7 +80,8 @@ These apply to `src/` and `build.zig`:
 ## Nix package
 
 `packages.default` builds with Zig from `zig-overlay` against a fixed-output derivation of the
-Zig package tree (`zig build --fetch=all`). When `build.zig.zon` dependencies change, set that
+Zig package tree (`zig build --fetch=all`): the lazy dependencies of the vendored nanoui. When
+a `build.zig.zon` changes its dependencies, set that
 derivation's `outputHash` to `lib.fakeHash`, run `nix build`, and copy the reported hash. The
 build has no `xcrun`, so on macOS it points Zig at the nixpkgs Apple SDK with
 `NIX_CFLAGS_COMPILE` and `--search-prefix`, then removes the SDK rpath and the Zig store path
@@ -89,7 +99,8 @@ archives still include x86_64 macOS.
 `.github/workflows/release.yml` checks the tag against `build.zig.zon`, runs the tests, builds
 the archives with `tools/package.sh`, and publishes a GitHub Release with that changelog
 section as notes. `.github/workflows/ci.yml` runs format, tests, cross builds and
-`nix flake check` on macOS and Linux for pushes to `main` and pull requests.
+`nix flake check` on macOS and Linux, and the tests on Windows (Zig from `mlugg/setup-zig`,
+no Nix), for pushes to `main` and pull requests.
 
 The release signs the macOS apps with the "Developer ID Application" identity and notarizes
 them with an App Store Connect API key, from the repository secrets listed at the top of

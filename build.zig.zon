@@ -2,12 +2,10 @@
     .name = .nanoview,
     .version = "0.2.0",
     .dependencies = .{
-        .nanoui = .{
-            .url = "git+https://github.com/justrach/nanoui?ref=v0.14.0#7b3227295d37982306eee7b87b3e1fbbb76b3970",
-            .hash = "nanoui-0.14.0-we0KMVwFOwDGZlfnq2LthniS08HthaiFaP6vL3Asa5sw",
-        },
+        // nanoui v0.14.0 (7b32272) plus nanoview's patches; see AGENTS.md.
+        .nanoui = .{ .path = "vendor/nanoui" },
     },
     .minimum_zig_version = "0.17.0",
-    .paths = .{ "build.zig", "build.zig.zon", "src", "macos" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "macos", "vendor" },
     .fingerprint = 0x7ba7d095b7daae42,
 }

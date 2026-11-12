@@ -38,6 +38,7 @@
           ./src
           ./macos
           ./linux
+          ./vendor
         ];
       };
     in
@@ -47,8 +48,8 @@
         let
           zig = zigFor pkgs;
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
-          # The Zig package tree, nanoui and its lazy dependencies, fetched once.
-          # Update the hash when build.zig.zon changes its dependencies.
+          # The Zig package tree: the lazy dependencies of the vendored nanoui, fetched once.
+          # Update the hash when a build.zig.zon changes its dependencies.
           deps = pkgs.stdenvNoCC.mkDerivation {
             pname = "nanoview-zig-deps";
             inherit version src;
@@ -62,7 +63,7 @@
             installPhase = "cp -r zig-pkg $out";
             outputHashMode = "recursive";
             outputHashAlgo = "sha256";
-            outputHash = "sha256-+NSm+C92x4zuJKpoYs7vhFkjTXf9gwefG0hPZWJPMTE=";
+            outputHash = "sha256-ZCI7+8TBorzBkIhC5tT8sR9/7flUSSw+RMu0OdeGbV8=";
           };
           nanoview = pkgs.stdenvNoCC.mkDerivation {
             pname = "nanoview";
