@@ -501,8 +501,9 @@ pub const Surface = struct {
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
-                if (wp & 0x0008 != 0) {
-                    // Windows synthesizes Ctrl+wheel for touchpad pinch.
+                if (wp & 0x0008 != 0 and self.ctx.wants_wheel) {
+                    // Windows synthesizes Ctrl+wheel for touchpad pinch; a view
+                    // that takes the wheel gets it as zoom, others still scroll.
                     self.ctx.input.zoom *= @exp(@as(f32, @floatFromInt(raw)) / 600);
                     pace_side.onInput(self);
                     return 0;
