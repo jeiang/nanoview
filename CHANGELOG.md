@@ -23,6 +23,8 @@ section that matches its tag.
   sort order, the title text, a hidden title bar (Windows) and always on top (`t`).
 - Keys can be rebound with `key.<action>` lines in `settings.conf`.
 - Opened files and folders are remembered in a recent list.
+- Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z, not on Windows),
+  copy the picture (Cmd/Ctrl+C) and paste files or a picture (Cmd/Ctrl+V).
 - BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
   and libwebp v1.6.0); the archives carry their license notices.
 - macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI, PBM, JPEG XL, MPO, PICT and some camera RAW

@@ -71,6 +71,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/shell.zig` | Trash and reveal; macOS goes through nanoui |
 | `src/shell_linux.zig`, `shell_dbus.zig` | FreeDesktop trash; `FileManager1.ShowItems` through GIO (dlopen) |
 | `src/shell_windows.zig` | Recycle Bin and Explorer selection |
+| `src/fileops.zig` | Rename checks and the stack of trashed pictures for put back |
 | `src/sort_order.zig` | Picks the system file manager's order per OS |
 | `src/ds_store.zig`, `src/bplist.zig` | Finder `.DS_Store` and binary plist readers |
 | `src/explorer_sort.zig` | Explorer window sort order over COM (Windows only) |

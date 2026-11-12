@@ -49,12 +49,19 @@ Several pictures from one folder limit the list to those pictures until the next
 | `i` | Show name, size, zoom, position, format, file size and date |
 | `f`, Escape | Full screen, leave full screen |
 | Cmd+Backspace, Forward Delete | Move to Trash |
+| Cmd/Ctrl+Z | Put back the last picture moved to the Trash (not on Windows) |
+| F2 | Rename: Enter renames, Escape cancels; an existing file is never replaced |
+| Cmd/Ctrl+C | Copy the picture at full size; on macOS and Windows the file goes with it |
+| Cmd/Ctrl+V | Open copied files, or show a copied picture |
 | `t` | Keep the window above others |
 | Cmd/Ctrl+R | Reveal in file manager, with the file selected |
 | Cmd/Ctrl+Shift+C | Copy path |
 
 Rotation, mirror and flip change the view only: nothing is written to disk. The folder is read
 again before a step when it changed on disk. A command that fails says so in the window.
+Put back remembers up to 16 pictures trashed since the program started. A pasted picture is
+shown as "Clipboard": it is not a file, so the step keys do nothing, and trash, reveal and
+rename say so.
 
 ### Formats
 
