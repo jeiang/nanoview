@@ -8,6 +8,7 @@ const viewport_mod = @import("viewport.zig");
 const orientation = @import("orientation.zig");
 const sort_order = @import("sort_order.zig");
 const preload_mod = @import("preload.zig");
+const settings_mod = @import("settings.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -45,6 +46,7 @@ pub const Source = union(enum) {
 };
 
 pub const State = struct {
+    settings: settings_mod.Settings = .{},
     io: std.Io,
     gpa: std.mem.Allocator, // only for nanoui.dialog.open's result
     file_buffer: []u8, // file_size_max bytes, allocated once in main
