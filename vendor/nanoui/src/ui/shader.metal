@@ -390,6 +390,7 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
     if (i.kind == 3.0) {
         // Premultiplied already: scaled by the corners' coverage and opacity.
         constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
         float coverage = 0.0;
         if (blur) {
             for (int k = 0; k < 5; k++) {
@@ -400,7 +401,7 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         } else {
             coverage = 1.0 - smoothstep(-aa, aa, d);
         }
-        float4 px = images.sample(s, in.uv);
+        float4 px = i.border_width > 0.5 ? images.sample(nearest, in.uv) : images.sample(s, in.uv);
         // Tinted: the picture's shape in one color (a mark following the theme).
         if (i.border_color.a > 0.0) {
             float a = px.a * i.border_color.a * coverage * i.color.a;

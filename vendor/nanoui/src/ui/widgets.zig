@@ -133,6 +133,8 @@ pub const ImageOptions = struct {
     max_height: f32 = 360,
     radius: f32 = 8,
     opacity: f32 = 1,
+    /// Linear filtering smooths scaled pictures; nearest preserves hard texels.
+    sampling: ctx_mod.Content.Image.Sampling = .linear,
     /// Pixels a point the picture was made at: 2 for a Retina screenshot,
     /// 1 for most pictures on the web (a badge).
     scale: f32 = 2,
@@ -173,13 +175,13 @@ pub fn image(c: *Context, opts: ImageOptions) bool {
     // Sized from the picture's header; decoded at device size and packed only when drawn.
     const e = c.text.images.info(k, src) orelse return false;
     if (opts.box) |b| {
-        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .sampling = opts.sampling, .tint = opts.tint, .part = opts.part } }, null);
         return true;
     }
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
     const s = @min(1, @min(opts.max_width / @max(w, 1), opts.max_height / @max(h, 1)));
-    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .sampling = opts.sampling, .tint = opts.tint, .part = opts.part } }, null);
     return true;
 }
 

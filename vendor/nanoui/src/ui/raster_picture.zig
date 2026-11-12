@@ -1,6 +1,6 @@
 //! Pictures and textures drawn by the CPU renderer (`raster.zig`), as
-//! `shader.metal` draws kinds 3 and 8: sampled bilinear, their corners
-//! rounded. A texture is first made BGRA at its own size
+//! `shader.metal` draws kinds 3 and 8: sampled linear or nearest, their
+//! corners rounded. A texture is first made BGRA at its own size
 //! (`texture_cpu.zig`): a pixel buffer's planes converted as the colour
 //! stage converts them on the GPU.
 const std = @import("std");
@@ -31,8 +31,14 @@ pub const Source = struct {
     }
 };
 
-/// A BGRA texel, bilinear as Metal's sampler.
-fn samplePicture(p: Source, u: f32, v: f32) [4]f32 {
+/// A BGRA texel, clamped and filtered as the GPU's image sampler.
+fn samplePicture(p: Source, u: f32, v: f32, nearest: bool) [4]f32 {
+    if (nearest) {
+        const x: usize = @intFromFloat(std.math.clamp(@floor(u * @as(f32, @floatFromInt(p.w))), 0, @as(f32, @floatFromInt(p.w - 1))));
+        const y: usize = @intFromFloat(std.math.clamp(@floor(v * @as(f32, @floatFromInt(p.h))), 0, @as(f32, @floatFromInt(p.h - 1))));
+        const t = p.pixels[y * p.stride + x * 4 ..][0..4];
+        return .{ @as(f32, @floatFromInt(t[0])) / 255, @as(f32, @floatFromInt(t[1])) / 255, @as(f32, @floatFromInt(t[2])) / 255, @as(f32, @floatFromInt(t[3])) / 255 };
+    }
     const fx = u * @as(f32, @floatFromInt(p.w)) - 0.5;
     const fy = v * @as(f32, @floatFromInt(p.h)) - 0.5;
     const x0f = @floor(fx);
@@ -63,6 +69,7 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
     // (`Instance.m`): the box's own coordinates decide
     // what is inside it, not the pixel's.
     const rot = i.xf[0] != 0 or gpu.affine(i) != null or gpu.hasMatrix(i);
+    const nearest = i.kind == gpu.Kind.image and i.border_width > 0.5;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
@@ -77,7 +84,7 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
             const aa = @max(sd[1] * raster.pixelAt(i, inv), 0.0001) * 0.5;
             const k = (1 - raster.smoothstep(-aa, aa, sd[0])) * i.color[3] * raster.clipCover(i, wx, wy, inv);
             if (k <= 0) continue;
-            const t = samplePicture(p, i.uv[0] + (i.uv[2] - i.uv[0]) * tx, v);
+            const t = samplePicture(p, i.uv[0] + (i.uv[2] - i.uv[0]) * tx, v, nearest);
             // A picture's tint; a texture's border colour is its map (`gpu.affine`).
             if (i.kind != gpu.Kind.texture and i.border_color[3] > 0) {
                 const a = t[3] * i.border_color[3] * k;
@@ -85,6 +92,39 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
                 continue;
             }
             raster.blend(out.bytes, row + x * 4, t[2] * k, t[1] * k, t[0] * k, t[3] * k);
+        }
+    }
+}
+
+test "image sampling selects linear or nearest and clamps atlas edges" {
+    const pixels = [_]u8{ 0, 0, 0, 255, 255, 255, 255, 255 };
+    const p: Source = .{ .pixels = &pixels, .w = 2, .h = 1, .stride = 8 };
+    const linear = samplePicture(p, 0.5, 0.5, false);
+    const nearest = samplePicture(p, 0.5, 0.5, true);
+    try std.testing.expectEqual(@as(f32, 0.5), linear[0]);
+    try std.testing.expectEqual(@as(f32, 1), nearest[0]);
+    try std.testing.expectEqual(@as(f32, 1), nearest[3]);
+    try std.testing.expectEqual(@as(f32, 0), samplePicture(p, -1, -1, true)[0]);
+    try std.testing.expectEqual(@as(f32, 1), samplePicture(p, 2, 2, true)[0]);
+}
+
+test "nearest pictures preserve reversed UV endpoints" {
+    const pixels = [_]u8{ 0, 0, 0, 255, 255, 255, 255, 255 };
+    const p: Source = .{ .pixels = &pixels, .w = 2, .h = 1, .stride = 8 };
+    var bytes: [32]u8 = @splat(0);
+    const out: gpu.Pixels = .{ .bytes = &bytes, .width = 4, .height = 2 };
+    const i: gpu.Instance = .{
+        .rect = .{ 0, 0, 4, 2 },
+        .color = .{ 1, 1, 1, 1 },
+        .uv = .{ 1, 1, 0, 0 },
+        .kind = gpu.Kind.image,
+        .border_width = 1,
+    };
+    picture(out, &i, p, 1, .{ 0, 0, 4, 2 });
+    for (0..2) |y| {
+        for (0..4) |x| {
+            try std.testing.expectEqual(@as(u8, if (x < 2) 255 else 0), bytes[(y * 4 + x) * 4]);
+            try std.testing.expectEqual(@as(u8, 255), bytes[(y * 4 + x) * 4 + 3]);
         }
     }
 }

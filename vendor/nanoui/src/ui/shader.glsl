@@ -377,7 +377,14 @@ vec4 shade() {
     }
     if (kind == 3.0) {
         // Premultiplied already: scaled by the corners' coverage and opacity.
-        vec4 px = texture(images, v_uv);
+        vec4 px;
+        if (i_misc.y > 0.5) {
+            ivec2 size = textureSize(images, 0);
+            ivec2 at = clamp(ivec2(floor(v_uv * vec2(size))), ivec2(0), size - ivec2(1));
+            px = texelFetch(images, at, 0);
+        } else {
+            px = texture(images, v_uv);
+        }
 #ifdef GL_ES
         // BGRA pixels, which OpenGL ES took for RGBA.
         px = px.bgra;
