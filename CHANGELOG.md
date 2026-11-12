@@ -18,6 +18,8 @@ section that matches its tag.
   the picture (`b`), and zoom below fit down to 10 %.
 - Opening a folder, and opening several pictures at once.
 - The info line also shows the format, file size and modified date.
+- A context menu with every command (right click), and the same commands in the macOS menu
+  bar, with the current keys, check marks and the recent files.
 - Animated GIF, APNG and WebP play, with pause (`k`), next frame (`.`) and speed (`[`, `]`);
   the `animation` setting turns it off.
 - Pages of multi-page TIFF and multi-size ICO files (Alt+Down, Alt+Up) on macOS and Windows.

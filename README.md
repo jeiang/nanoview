@@ -28,6 +28,10 @@ Open a picture, a folder or several pictures from the command line, with Cmd/Ctr
 dropping them on the window, or with Finder's "Open With". A folder shows its first picture.
 Several pictures from one folder limit the list to those pictures until the next open.
 
+Every command is also in the context menu: right click, Control-click on macOS, or Shift+F10
+on Linux and Windows. It lists what applies to the shown picture, with the current keys, check
+marks for the switches, and the recent files. macOS has the same commands in the menu bar.
+
 | Key | Action |
 |---|---|
 | Left, Right, Space, Shift+Space | Previous, next picture in the folder |

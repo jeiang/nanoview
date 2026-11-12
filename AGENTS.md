@@ -55,8 +55,9 @@ the snapshot flag a real window opens and does not exit.
 | `src/main.zig` | Startup: buffers, settings, window, worker thread, arguments |
 | `src/app.zig` | `State` and commands: open, step, slideshow, trash, reveal, promote |
 | `src/view.zig` | Per-frame UI: keys, pointer, drops, drawing, window fit |
-| `src/actions.zig` | The `Action` list and the default keys; `view.perform` runs them |
+| `src/actions.zig` | The `Action` list, the default keys and each action's menu title (`infos`); `view.perform` runs them. A new action needs a line in each |
 | `src/keymap.zig` | Key names and the effective key table after `key.<action>` lines |
+| `src/menus.zig` | What applies now, check marks, the context menu and the menu bar template |
 | `src/viewport.zig` | Zoom, pan, fit and the visible part of a rotated picture |
 | `src/folder.zig` | Folder listing, natural and Finder-style sorting |
 | `src/preload.zig` | Worker that preloads neighbors into a fixed pool |
@@ -83,7 +84,7 @@ the snapshot flag a real window opens and does not exit.
 | `src/explorer_sort.zig` | Explorer window sort order over COM (Windows only) |
 | `src/orientation.zig` | EXIF orientation |
 | `src/paths.zig` | `file://` URLs, path joins, fixed-buffer file reads |
-| `src/tests.zig` | Test root and `ui.Tester` tests |
+| `src/tests.zig`, `src/tests_menus.zig` | Test root and `ui.Tester` tests |
 | `tools/make_ds_store_fixture.py` | Writes `src/testdata/list_date_modified.DS_Store` |
 | `tools/icon.zig` | Draws the app icon from signed distances; `sips` and `iconutil` make the `.icns`, the `.ico` frames and the Linux PNG |
 
