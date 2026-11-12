@@ -200,9 +200,11 @@ const none = std.math.maxInt(usize);
 /// The submenu that's out, moved by the pointer.
 const SubmenuOut = struct { at: usize = none, rect: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 } };
 
-/// A menu's items; the index of the one clicked. `out` is null in a
-/// submenu: one level.
+/// A menu's items, scrolling when taller than the window; the index of
+/// the one clicked. `out` is null in a submenu: one level.
 fn menuRows(c: *ui.Context, items: []const MenuItem, row_height: f32, out: ?*SubmenuOut) ?usize {
+    const scroller = ui.div(c).column().gap(2).wFull().maxH(@max(row_height, c.size.h - 24)).scrollY();
+    defer scroller.end();
     const t = kit.tokens(c);
     var chosen: ?usize = null;
     const checks = for (items) |it| {
