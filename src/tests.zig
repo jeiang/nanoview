@@ -20,6 +20,8 @@ test {
     _ = @import("actions.zig");
     _ = @import("settings.zig");
     _ = @import("decode.zig");
+    _ = @import("webp.zig");
+    _ = @import("wuffs.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
