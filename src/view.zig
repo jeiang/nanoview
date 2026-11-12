@@ -50,6 +50,8 @@ fn body(s: *State, c: *ui.Context) void {
     fit_options(s);
     preload_bounds(s, c);
     pointer(s, c);
+    // A side button stepped: the next frame sets up the new picture.
+    if (s.viewport_generation != s.generation) return;
     if (s.source == .pixels and !s.promote_failed and needs_promote(s, c)) s.promote();
     draw(s, c, s.picture_key(&key_buf));
     if (s.info_shown) info(s, c);
