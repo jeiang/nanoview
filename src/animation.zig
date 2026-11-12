@@ -151,7 +151,7 @@ pub const Player = struct {
     }
 
     /// Pauses, or resumes; a finished animation starts over.
-    pub fn toggle_pause(p: *Player) void {
+    pub fn toggle_pause(p: *Player) Error!void {
         assert(p.active());
         p.due = null;
         if (p.playing) {
@@ -160,6 +160,7 @@ pub const Player = struct {
         }
         if (p.frame_count == 1) return;
         if (p.finished) {
+            try p.rewind();
             p.finished = false;
             p.plays = 0;
         }
@@ -172,6 +173,7 @@ pub const Player = struct {
         p.playing = false;
         p.due = null;
         try p.advance(true);
+        p.finished = false;
     }
 
     pub fn change_speed(p: *Player, faster: bool) void {
@@ -205,6 +207,10 @@ pub const Player = struct {
             p.finished = p.frame_count != 1;
             return;
         }
+        try p.rewind();
+    }
+
+    fn rewind(p: *Player) Error!void {
         switch (p.decoder) {
             .none => unreachable,
             .wuffs => |*animation| try animation.reset(),

@@ -1438,3 +1438,25 @@ test "save frame writes the shown frame unrotated and it reads back the same" {
     f.tester.frame();
     try testing.expect(f.tester.containsText("Cannot save the frame"));
 }
+
+test "a finished play-once GIF restarts and stepping shows paused" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const once = comptime anim_fixtures.gif(1, 1, .{
+        .{ 255, 0, 0 }, .{ 0, 255, 0 }, .{ 0, 0, 255 }, .{ 0, 0, 0 },
+    }, null, &.{ gif_dot(&.{0}, 10), gif_dot(&.{1}, 10) });
+    try write_file(f, "once.gif", once);
+    try f.open("once.gif");
+    f.tester.advance(0.4);
+    try testing.expect(f.state.player.finished);
+    _ = f.tester.shortcut(.{ .key = 'k' });
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    f.tester.advance(0.15);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+    f.tester.advance(0.2);
+    try testing.expect(f.state.player.finished);
+    _ = f.tester.shortcut(.{ .key = '.' });
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    try testing.expect(f.tester.containsText("frame 1/2, paused"));
+}

@@ -53,7 +53,10 @@ pub fn perform(s: *State, action: actions.Action) void {
     const p = &s.player;
     switch (action) {
         .pause => {
-            p.toggle_pause();
+            p.toggle_pause() catch |err| {
+                s.notify("Animation stopped: {s}", .{@errorName(err)});
+                return;
+            };
             s.notify("{s}", .{if (p.playing) "Playing" else "Paused"});
         },
         .next_frame => p.step() catch |err| {
