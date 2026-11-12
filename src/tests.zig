@@ -27,6 +27,7 @@ test {
     _ = @import("wuffs.zig");
     _ = @import("decode_windows.zig");
     _ = @import("fileops.zig");
+    _ = @import("tests_menus.zig");
 }
 
 /// What the stand-in clipboard holds: tests never read the real one.
@@ -35,7 +36,7 @@ const Pasted = struct {
     text: ?[]const u8 = null,
     image: ?[]const u8 = null,
 };
-var pasted: Pasted = .{};
+pub var pasted: Pasted = .{};
 
 const fake_clipboard: app.Clipboard = .{
     .read_files = fake_files,
@@ -59,7 +60,7 @@ fn fake_image(gpa: std.mem.Allocator) anyerror!?[]u8 {
 }
 /// A State and a Tester over it, on the heap: State is too large for the
 /// stack. The large buffers stay untouched until used.
-const Fixture = struct {
+pub const Fixture = struct {
     state: *State,
     file_buffer: []u8,
     pool: []u8,
@@ -70,7 +71,7 @@ const Fixture = struct {
     dir_buf: [paths.path_max]u8 = undefined,
     dir_len: usize = 0,
 
-    fn create() !*Fixture {
+    pub fn create() !*Fixture {
         const f = try testing.allocator.create(Fixture);
         errdefer testing.allocator.destroy(f);
         const state = try testing.allocator.create(State);
@@ -95,7 +96,7 @@ const Fixture = struct {
         return f;
     }
 
-    fn destroy(f: *Fixture) void {
+    pub fn destroy(f: *Fixture) void {
         f.tester.deinit();
         f.tmp.cleanup();
         app.free_pages(f.file_buffer);
@@ -106,7 +107,7 @@ const Fixture = struct {
         testing.allocator.destroy(f);
     }
 
-    fn write_png(f: *Fixture, name: []const u8, width: usize, height: usize) !void {
+    pub fn write_png(f: *Fixture, name: []const u8, width: usize, height: usize) !void {
         const pixels = try testing.allocator.alloc(u8, width * height * 4);
         defer testing.allocator.free(pixels);
         @memset(pixels, 0xff);
@@ -119,7 +120,7 @@ const Fixture = struct {
         try f.tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = png });
     }
 
-    fn open(f: *Fixture, name: []const u8) !void {
+    pub fn open(f: *Fixture, name: []const u8) !void {
         var buf: [paths.path_max]u8 = undefined;
         const full = paths.join(f.dir_buf[0..f.dir_len], name, &buf) orelse return error.TooLong;
         f.state.open_path(full);
