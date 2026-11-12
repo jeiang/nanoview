@@ -1,11 +1,13 @@
 //! Neighbors of the shown picture, loaded ahead by one worker thread into a
-//! fixed pool: decoded to window-fit pixels on macOS, file bytes elsewhere.
+//! fixed pool: decoded to window-fit pixels by the system codec when available.
 //! Shared state is touched only under `mutex`; a slot's bytes belong to the
 //! worker while the slot is `loading` and are read-only otherwise.
 const std = @import("std");
-const builtin = @import("builtin");
+const decode = @import("decode.zig");
 const folder_mod = @import("folder.zig");
 const paths = @import("paths.zig");
+const sniff = @import("sniff.zig");
+const animation = @import("animation.zig");
 const assert = std.debug.assert;
 
 pub const back_count: u32 = 5;
@@ -13,9 +15,7 @@ pub const ahead_count: u32 = 15;
 pub const slot_count: u32 = back_count + ahead_count + 1;
 pub const pool_bytes: u32 = 512 * 1024 * 1024;
 pub const slot_bytes: u32 = (pool_bytes / slot_count) & ~@as(u32, 4095); // 24.4 MiB
-pub const decoded = builtin.os.tag == .macos; // else slots hold file bytes
-/// Pictures nanoui refuses, and so does the worker.
-const pixels_max: u64 = 64 * 1000 * 1000;
+pub const decoded = decode.supported;
 
 pub const SlotState = enum { empty, loading, ready, failed };
 
@@ -24,10 +24,13 @@ pub const Slot = struct {
     index: u32 = 0, // folder index it holds
     epoch: u32 = 0,
     len: u32 = 0, // bytes used
+    encoded: bool = false, // Linux without GdkPixbuf: portable nanoui file bytes
     width: u32 = 0, // decoded pixels (macOS)
     height: u32 = 0,
     native_w: u32 = 0, // upright full size in pixels (macOS)
     native_h: u32 = 0,
+    animated: bool = false, // the file plays: the shown picture reads it again
+    page_count: u32 = 1, // the shown picture is page 0 of these
 };
 
 const Job = struct {
@@ -188,10 +191,29 @@ pub const Preload = struct {
         if (!decoded) {
             const bytes = paths.read_file(p.io, file_path, memory) catch return false;
             result.len = @intCast(bytes.len);
+            result.animated = animation.detect(bytes) != null;
             return true;
         }
         const encoded = paths.read_file(p.io, file_path, p.scratch) catch return false;
-        image_io.decode_fit(encoded, memory, job.bounds_w, job.bounds_h, result) catch return false;
+        const animated = animation.detect(encoded) != null;
+        const bw = job.bounds_w;
+        const size = decode.decode_fit(encoded, memory, bw, job.bounds_h, 0) catch |err| {
+            const portable = if (sniff.detect(encoded)) |f| f.baseline() else false;
+            if (err != error.Unavailable and !portable) return false;
+            if (encoded.len > memory.len) return false;
+            @memcpy(memory[0..encoded.len], encoded);
+            result.* = .{ .encoded = true, .len = @intCast(encoded.len), .animated = animated };
+            return true;
+        };
+        result.* = .{
+            .width = size.width,
+            .height = size.height,
+            .native_w = size.native_w,
+            .native_h = size.native_h,
+            .len = size.width * size.height * 4,
+            .animated = animated,
+            .page_count = size.page_count,
+        };
         assert(result.len <= memory.len);
         return true;
     }
@@ -266,168 +288,5 @@ pub const Preload = struct {
         assert(slot < slot_count);
         const pinned = p.pinned orelse return false;
         return pinned == slot;
-    }
-};
-
-/// macOS: a window-fit decode into caller memory, as nanoui's own
-/// `ui/image.zig` decodeFit does it. ImageIO and CoreGraphics only: no
-/// AppKit state, so it runs off the main thread.
-const image_io = struct {
-    const CGRect = extern struct { x: f64, y: f64, w: f64, h: f64 };
-    extern "c" const kCFAllocatorNull: *const anyopaque;
-    extern "c" const kCFBooleanTrue: *const anyopaque;
-    extern "c" const kCFTypeDictionaryKeyCallBacks: opaque {};
-    extern "c" const kCFTypeDictionaryValueCallBacks: opaque {};
-    extern "c" const kCGImagePropertyOrientation: *const anyopaque;
-    extern "c" const kCGImagePropertyPixelWidth: *const anyopaque;
-    extern "c" const kCGImagePropertyPixelHeight: *const anyopaque;
-    extern "c" const kCGImageSourceCreateThumbnailFromImageAlways: *const anyopaque;
-    extern "c" const kCGImageSourceThumbnailMaxPixelSize: *const anyopaque;
-    extern "c" const kCGImageSourceCreateThumbnailWithTransform: *const anyopaque;
-    extern "c" const kCGColorSpaceSRGB: *const anyopaque;
-    extern "c" fn CFDataCreateWithBytesNoCopy(
-        alloc: ?*const anyopaque,
-        bytes: [*]const u8,
-        len: isize,
-        deallocator: *const anyopaque,
-    ) ?*anyopaque;
-    extern "c" fn CFRelease(obj: *anyopaque) void;
-    extern "c" fn CFDictionaryGetValue(dict: *anyopaque, key: *const anyopaque) ?*anyopaque;
-    extern "c" fn CFNumberGetValue(n: *anyopaque, kind: c_int, out: *anyopaque) bool;
-    extern "c" fn CFNumberCreate(
-        alloc: ?*anyopaque,
-        kind: c_int,
-        value: *const anyopaque,
-    ) ?*anyopaque;
-    extern "c" fn CFDictionaryCreate(
-        alloc: ?*anyopaque,
-        keys: [*]const ?*const anyopaque,
-        values: [*]const ?*const anyopaque,
-        n: isize,
-        key_cb: *const anyopaque,
-        value_cb: *const anyopaque,
-    ) ?*anyopaque;
-    extern "c" fn CGImageSourceCreateWithData(data: *anyopaque, options: ?*anyopaque) ?*anyopaque;
-    extern "c" fn CGImageSourceCopyPropertiesAtIndex(
-        src: *anyopaque,
-        index: usize,
-        options: ?*anyopaque,
-    ) ?*anyopaque;
-    extern "c" fn CGImageSourceCreateThumbnailAtIndex(
-        src: *anyopaque,
-        index: usize,
-        options: ?*anyopaque,
-    ) ?*anyopaque;
-    extern "c" fn CGImageGetWidth(img: *anyopaque) usize;
-    extern "c" fn CGImageGetHeight(img: *anyopaque) usize;
-    extern "c" fn CGImageRelease(img: *anyopaque) void;
-    extern "c" fn CGColorSpaceCreateWithName(name: *const anyopaque) ?*anyopaque;
-    extern "c" fn CGColorSpaceRelease(space: *anyopaque) void;
-    extern "c" fn CGBitmapContextCreate(
-        data: ?*anyopaque,
-        w: usize,
-        h: usize,
-        bpc: usize,
-        bpr: usize,
-        space: ?*anyopaque,
-        info: u32,
-    ) ?*anyopaque;
-    extern "c" fn CGContextRelease(ctx: *anyopaque) void;
-    extern "c" fn CGContextSetInterpolationQuality(ctx: *anyopaque, quality: c_int) void;
-    extern "c" fn CGContextDrawImage(ctx: *anyopaque, rect: CGRect, image: *anyopaque) void;
-
-    /// Premultiplied BGRA, little endian, as nanoui draws pixels.
-    const bgra_premultiplied: u32 = 2 | (2 << 12);
-    const number_sint32: c_int = 3;
-
-    const Native = struct { w: u32, h: u32 };
-
-    /// The upright full size from the header and the EXIF orientation.
-    fn native_size(src: *anyopaque) !Native {
-        const props = CGImageSourceCopyPropertiesAtIndex(src, 0, null) orelse return error.NotImage;
-        defer CFRelease(props);
-        var w: i32 = 0;
-        var h: i32 = 0;
-        var orientation: i32 = 1;
-        if (CFDictionaryGetValue(props, kCGImagePropertyPixelWidth)) |n|
-            _ = CFNumberGetValue(n, number_sint32, &w);
-        if (CFDictionaryGetValue(props, kCGImagePropertyPixelHeight)) |n|
-            _ = CFNumberGetValue(n, number_sint32, &h);
-        if (CFDictionaryGetValue(props, kCGImagePropertyOrientation)) |n|
-            _ = CFNumberGetValue(n, number_sint32, &orientation);
-        if (w <= 0 or h <= 0) return error.NotImage;
-        if (@as(u64, @intCast(w)) * @as(u64, @intCast(h)) > pixels_max) return error.TooLarge;
-        const swap = orientation >= 5 and orientation <= 8;
-        const result: Native = if (swap)
-            .{ .w = @intCast(h), .h = @intCast(w) }
-        else
-            .{ .w = @intCast(w), .h = @intCast(h) };
-        assert(result.w > 0 and result.h > 0);
-        return result;
-    }
-
-    fn thumbnail(src: *anyopaque, side: i32) !*anyopaque {
-        assert(side > 0);
-        const max_n = CFNumberCreate(null, number_sint32, &side) orelse return error.Data;
-        defer CFRelease(max_n);
-        const keys = [_]?*const anyopaque{
-            kCGImageSourceCreateThumbnailFromImageAlways,
-            kCGImageSourceThumbnailMaxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform,
-        };
-        const values = [_]?*const anyopaque{ kCFBooleanTrue, max_n, kCFBooleanTrue };
-        const opts = CFDictionaryCreate(
-            null,
-            &keys,
-            &values,
-            keys.len,
-            &kCFTypeDictionaryKeyCallBacks,
-            &kCFTypeDictionaryValueCallBacks,
-        ) orelse return error.Data;
-        defer CFRelease(opts);
-        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts) orelse error.NotImage;
-    }
-
-    fn decode_fit(encoded: []const u8, out: []u8, bounds_w: u32, bounds_h: u32, slot: *Slot) !void {
-        assert(bounds_w > 0 and bounds_h > 0);
-        if (encoded.len == 0) return error.NotImage;
-        const len: isize = @intCast(encoded.len);
-        const data = CFDataCreateWithBytesNoCopy(null, encoded.ptr, len, kCFAllocatorNull) orelse
-            return error.Data;
-        defer CFRelease(data);
-        const src = CGImageSourceCreateWithData(data, null) orelse return error.NotImage;
-        defer CFRelease(src);
-        const native = try native_size(src);
-        const nw: f64 = @floatFromInt(native.w);
-        const nh: f64 = @floatFromInt(native.h);
-        const bw: f64 = @floatFromInt(bounds_w);
-        const bh: f64 = @floatFromInt(bounds_h);
-        const s = @min(1, @min(bw / nw, bh / nh));
-        const side: i32 = @intFromFloat(@max(1, @ceil(@max(nw, nh) * s)));
-        const img = try thumbnail(src, side);
-        defer CGImageRelease(img);
-        const w = CGImageGetWidth(img);
-        const h = CGImageGetHeight(img);
-        if (w == 0 or h == 0) return error.NotImage;
-        if (w * h * 4 > out.len) return error.TooLarge;
-        const pixels = out[0 .. w * h * 4];
-        @memset(pixels, 0);
-        const space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB) orelse return error.ColorSpace;
-        defer CGColorSpaceRelease(space);
-        const info = bgra_premultiplied;
-        const ctx = CGBitmapContextCreate(pixels.ptr, w, h, 8, w * 4, space, info) orelse
-            return error.BitmapContext;
-        defer CGContextRelease(ctx);
-        CGContextSetInterpolationQuality(ctx, 3);
-        const rect: CGRect = .{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) };
-        CGContextDrawImage(ctx, rect, img);
-        slot.* = .{
-            .width = @intCast(w),
-            .height = @intCast(h),
-            .native_w = native.w,
-            .native_h = native.h,
-            .len = @intCast(pixels.len),
-        };
-        assert(slot.len == slot.width * slot.height * 4);
     }
 };

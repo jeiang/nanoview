@@ -1,0 +1,11 @@
+Wuffs single-file C library, copied unmodified from the official repository.
+
+Repository: https://github.com/google/wuffs
+Commit:     b36a81d3352604fee1fee3661f39909706b1b966 (2026-11-02)
+File:       release/c/wuffs-v0.4.c (WUFFS_VERSION_STRING "0.4.0-alpha.12+4048.20261020")
+SHA-256:    458066457347bd6d9bc3c906aa8292bea4488577727569ddd9436fdd89d5f04d
+Licenses:   LICENSE, LICENSE-MIT, LICENSE-APACHE from the same commit (dual MIT / Apache-2.0)
+
+v0.4 is used rather than the stable v0.3 because v0.3 has no QOI decoder.
+src/wuffs_bridge.c selects the modules (BMP, GIF, PNG, QOI, TARGA and their
+dependencies) and the BGRA_PREMUL destination format with preprocessor macros.

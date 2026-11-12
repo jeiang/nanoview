@@ -7,6 +7,58 @@ section that matches its tag.
 
 ## [Unreleased]
 
+### Added
+
+- A release archive for Windows on arm64.
+- Home and End, a random picture (`x`), reload (F5, Cmd/Ctrl+Shift+R), Space and Shift+Space,
+  and the mouse's Back and Forward buttons.
+- A slideshow (`s`).
+- Mirror (`m`) and flip (`v`), fit modes (`w`: whole, width, height, fill), fit that enlarges
+  small pictures (`u`), sharp pixels above 100 % (`p`), zoom lock (`z`), a checkerboard behind
+  the picture (`b`), and zoom below fit down to 10 %.
+- Opening a folder, and opening several pictures at once.
+- The info line also shows the format, file size and modified date.
+- A context menu with every command (right click), and the same commands in the macOS menu
+  bar, with the current keys, check marks and the recent files.
+- Animated GIF, APNG and WebP play, with pause (`k`), next frame (`.`) and speed (`[`, `]`);
+  the `animation` setting turns it off.
+- Pages of multi-page TIFF and multi-size ICO files (Alt+Down, Alt+Up) on macOS and Windows.
+- Save the shown frame or page as PNG (Cmd/Ctrl+Shift+S).
+- EXIF details (`e`): camera, lens, date, exposure, GPS and color profile, from JPEG, TIFF-based
+  files, PNG and WebP.
+- A picture is known by its content: a file with a wrong or missing extension opens when
+  chosen, and the info line names its real format.
+- Windows: pictures with an embedded color profile are converted to sRGB.
+- `settings.conf`, read at startup: fit, zoom, loop, slideshow and trash options.
+- Settings for the background color, when and how far the window follows the picture, the
+  sort order, the title text, a hidden title bar (Windows, Linux) and always on top (`t`).
+- Keys can be rebound with `key.<action>` lines in `settings.conf`.
+- Opened files and folders are remembered in a recent list.
+- Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z),
+  copy the picture (Cmd/Ctrl+C) and paste files or a picture (Cmd/Ctrl+V).
+- `single_instance` setting: starting nanoview again hands its files to the running window.
+- BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
+  and libwebp v1.6.0); the archives carry their license notices.
+- macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI, PBM, JPEG XL, MPO, PICT and some camera RAW
+  pictures (DNG, CR3, RW2, RWL, 3FR, FFF, ARW, SR2, SRF, NEF, NRW, PEF, ERF).
+- Linux: pictures decode through gdk-pixbuf when it is installed (WebP, AVIF, HEIC, TIFF, BMP,
+  ICO and more); Move to Trash; reveal selects the file; touchpad pan and pinch; the window
+  takes the picture's size on GTK 4.
+- Windows: pictures decode through WIC (BMP, ICO, TIFF, WebP, DDS, JPEG XR, and HEIC, AVIF and
+  JPEG XL with a codec installed); Move to Trash; reveal selects the file; real full screen;
+  touchpad pan and pinch; the window takes the picture's size.
+
+### Changed
+
+- nanoui v0.14.0 is vendored in `vendor/nanoui`, so nanoview can carry patches to it.
+- The folder is read again before a step when it changed on disk.
+- Linux and Windows preload decoded pixels, as macOS does.
+
+### Fixed
+
+- A file that cannot be moved to the Trash now says so in the window.
+- After a rotation the window no longer shows the old frame, cut off, until the next click.
+
 ## [0.2.0] - 2026-11-10
 
 ### Added

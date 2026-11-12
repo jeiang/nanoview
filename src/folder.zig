@@ -11,11 +11,41 @@ pub const name_len_max: u32 = 255;
 /// Directory entries read per scan, pictures or not.
 const scan_entries_max: u32 = entries_max * 4;
 
-/// Lower case, without dots: what nanoui decodes on this system.
-pub const extensions: []const []const u8 = if (builtin.os.tag == .macos)
-    &.{ "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "avif", "tif", "tiff", "bmp", "ico" }
+/// Lower case, without dots. Initialized before folder scans or the worker start.
+pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
+    &.{
+        "png", "jpg",  "jpeg", "jpe",  "jfif", "gif", "heic", "heif", "webp", "avif",
+        "tif", "tiff", "bmp",  "ico",  "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
+        "pbm", "jxl",  "mpo",  "pict", "pct",  "dng", "cr3",  "rw2",  "rwl",  "3fr",
+        "qoi", "arw",  "erf",  "fff",  "nef",  "nrw", "pef",  "sr2",  "srf",
+    }
 else
-    &.{ "png", "jpg", "jpeg", "gif" };
+    always_extensions;
+
+/// What opens with no system decoder: nanoui's formats, then the bundled decoders'.
+const always_extensions: []const []const u8 = &.{
+    "png", "jpg", "jpeg", "gif", "bmp", "qoi", "tga", "webp",
+};
+const extensions_max: u32 = 64;
+var extension_table: [extensions_max][]const u8 = undefined;
+var extensions_initialized = false;
+
+/// Linux and Windows add the installed system decoders; a failed enumeration
+/// adds none.
+pub fn init_extensions() void {
+    if (extensions_initialized) return;
+    const rest = extension_table[always_extensions.len..];
+    const count = switch (builtin.os.tag) {
+        .linux => @import("decode_linux.zig").extensions(rest),
+        .windows => @import("decode_windows.zig").extensions(rest),
+        else => return,
+    };
+    @memcpy(extension_table[0..always_extensions.len], always_extensions);
+    extensions = extension_table[0 .. always_extensions.len + count];
+    extensions_initialized = true;
+    assert(extensions.len >= always_extensions.len);
+    assert(extensions.len <= extensions_max);
+}
 
 pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
 
@@ -25,6 +55,9 @@ pub const Folder = struct {
     entries: [entries_max]Entry = undefined,
     count: u32 = 0,
     order: sort_order.Order = .{},
+    /// A file the user opened: listed whatever its name, since its content decides.
+    kept_buf: [name_len_max]u8 = undefined,
+    kept_len: u32 = 0,
 
     pub fn reset(f: *Folder) void {
         f.names_len = 0;
@@ -32,10 +65,19 @@ pub const Folder = struct {
         assert(f.count == 0 and f.names_len == 0);
     }
 
+    /// Kept across scans until the next call; an empty name keeps none.
+    pub fn keep(f: *Folder, file_name: []const u8) void {
+        f.kept_len = if (file_name.len > name_len_max) 0 else @intCast(file_name.len);
+        @memcpy(f.kept_buf[0..f.kept_len], file_name[0..f.kept_len]);
+        assert(f.kept_len <= name_len_max);
+    }
+
     /// False when a limit stops it; a name that is not a picture is skipped.
     pub fn add(f: *Folder, file_name: []const u8) bool {
         assert(f.count <= entries_max and f.names_len <= names_bytes_max);
-        if (!is_image_name(file_name) or file_name.len > name_len_max) return true;
+        const kept = f.kept_len > 0 and std.mem.eql(u8, file_name, f.kept_buf[0..f.kept_len]);
+        if (!kept and !is_image_name(file_name)) return true;
+        if (file_name.len == 0 or file_name.len > name_len_max) return true;
         const len: u32 = @intCast(file_name.len);
         if (f.count == entries_max or names_bytes_max - f.names_len < len) return false;
         @memcpy(f.names[f.names_len..][0..len], file_name);
@@ -50,6 +92,19 @@ pub const Folder = struct {
         assert(f.count <= entries_max);
         std.mem.sort(Entry, f.entries[0..f.count], f, entry_less);
         assert(f.count < 2 or !entry_less(f, f.entries[1], f.entries[0]));
+    }
+
+    /// The `random` order: every arrangement as likely, from `seed`.
+    pub fn shuffle(f: *Folder, seed: u64) void {
+        assert(seed != 0 and f.count <= entries_max);
+        var state = seed;
+        var i = f.count;
+        while (i > 1) : (i -= 1) {
+            state = xorshift(state);
+            const j: u32 = @intCast(state % i);
+            std.mem.swap(Entry, &f.entries[i - 1], &f.entries[j]);
+        }
+        assert(i <= 1);
     }
 
     fn entry_less(f: *const Folder, a: Entry, b: Entry) bool {
@@ -254,6 +309,17 @@ fn compare_numbers(a: []const u8, b: []const u8) std.math.Order {
     return std.mem.order(u8, a, b);
 }
 
+/// A nonzero state stays nonzero.
+pub fn xorshift(state: u64) u64 {
+    assert(state != 0);
+    var x = state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    assert(x != 0);
+    return x;
+}
+
 const testing = std.testing;
 
 test "natural_less orders numbers by value" {
@@ -311,4 +377,74 @@ test "sort follows the order's key and direction" {
     f.order = .{ .key = .kind, .ascending = true };
     f.sort();
     try testing.expectEqualStrings("z.jpg", f.name(0));
+}
+
+test "each sort key orders entries, descending reverses only the key" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    const names = [_][]const u8{ "b.png", "a.jpg", "c.gif", "d.png" };
+    const sizes = [_]i64{ 2, 2, 1, 3 };
+    const dates = [_]i64{ 5, 1, 5, 3 };
+    for (names) |n| try testing.expect(f.add(n));
+    const Case = struct { sort_order.Choice, [4]u8, [4]u8 };
+    const cases = [_]Case{
+        .{ .name, "abcd".*, "dcba".* },
+        .{ .kind, "cabd".*, "bdac".* },
+        .{ .size, "cabd".*, "dabc".* },
+        .{ .date_modified, "adbc".*, "bcda".* },
+        .{ .date_created, "adbc".*, "bcda".* },
+        .{ .random, "abcd".*, "abcd".* },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }, [_][4]u8{ case[1], case[2] }) |descending, expected| {
+            f.order = sort_order.resolve(testing.io, "/", case[0], descending);
+            for (f.entries[0..f.count]) |*e| {
+                const k = for (names, 0..) |n, k| {
+                    if (std.mem.eql(u8, n, f.slice(e.*))) break k;
+                } else unreachable;
+                e.value = if (case[0] == .size) sizes[k] else dates[k];
+            }
+            f.sort();
+            for (expected, 0..) |letter, i| try testing.expectEqual(letter, f.name(@intCast(i))[0]);
+        }
+    }
+}
+
+test "a shuffle is a permutation and find still works" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    var buf: [8]u8 = undefined;
+    for (0..20) |i| try testing.expect(f.add(try std.fmt.bufPrint(&buf, "{d}.png", .{i})));
+    f.sort();
+    f.shuffle(42);
+    try testing.expectEqual(@as(u32, 20), f.count);
+    var moved: u32 = 0;
+    for (0..20) |i| {
+        const name_i = try std.fmt.bufPrint(&buf, "{d}.png", .{i});
+        const at = f.find(name_i).?;
+        try testing.expectEqualStrings(name_i, f.name(at));
+        moved += @intFromBool(at != i);
+    }
+    try testing.expect(moved > 0);
+    f.remove(3);
+    for (0..f.count) |i| {
+        const at: u32 = @intCast(i);
+        try testing.expectEqual(@as(?u32, at), f.find(f.name(at)));
+    }
+}
+
+test "the kept name is listed whatever its extension" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    f.keep("photo.dat");
+    for ([_][]const u8{ "photo.dat", "other.dat", "README" }) |n| try testing.expect(f.add(n));
+    try testing.expectEqual(@as(u32, 1), f.count);
+    try testing.expectEqualStrings("photo.dat", f.name(0));
+    f.reset();
+    f.keep("");
+    try testing.expect(f.add("photo.dat"));
+    try testing.expectEqual(@as(u32, 0), f.count);
 }

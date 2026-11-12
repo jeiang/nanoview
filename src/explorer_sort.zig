@@ -207,7 +207,7 @@ fn trim_separator(s: []const u16) []const u16 {
     return result;
 }
 
-fn eql_ignore_case(a: []const u16, b: []const u16) bool {
+pub fn eql_ignore_case(a: []const u16, b: []const u16) bool {
     if (a.len != b.len) return false;
     assert(a.len == b.len);
     for (a, b) |x, y| {

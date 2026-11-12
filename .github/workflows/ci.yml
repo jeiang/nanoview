@@ -27,6 +27,19 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           nix develop -c zig build -Dtarget=x86_64-windows-gnu
+          nix develop -c zig build -Dtarget=aarch64-windows-gnu
           nix develop -c zig build -Dtarget=x86_64-linux-gnu
       - name: Flake checks (package and format)
         run: nix flake check -L
+
+  # Windows has no Nix: Zig comes from the setup action, at the devshell's version.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Test
+        run: zig build test --summary all
