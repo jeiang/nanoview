@@ -587,11 +587,21 @@ pub const State = struct {
         s.slideshow_at = null;
         s.trash_pending = false;
         var location_buf: [paths.path_max]u8 = undefined;
+        const before = fileops.node(s.path());
         const location = shell.trash(s.io, s.path(), &location_buf) orelse {
             s.notify("Could not move {s} to the Trash", .{s.basename()});
             return;
         };
-        if (location.len > 0) s.trashed.push(s.path(), location);
+        // Restore needs the same file at `location`: a move keeps device
+        // and inode, so a copy (or nothing to compare) cannot be restored.
+        // Windows names no location; Restore asks the Recycle Bin for the
+        // newest item that was this path.
+        const after = if (location.len > 0) fileops.node(location) else null;
+        if (builtin.os.tag == .windows) {
+            s.trashed.push(s.path(), location, .{ .device = 0, .inode = 0 });
+        } else if (before != null and after != null and
+            std.meta.eql(before.?.identity, after.?.identity))
+            s.trashed.push(s.path(), location, before.?.identity);
         if (s.index) |i| {
             s.preload.lock();
             s.folder.remove(i);
@@ -617,21 +627,19 @@ pub const State = struct {
 
     /// Moves the newest file this run put in the Trash back, and shows it.
     pub fn restore(s: *State) void {
-        if (builtin.os.tag == .windows) {
-            return s.notify("Restore is not available on Windows", .{});
-        }
         const item = s.trashed.top() orelse return s.notify("Nothing to restore", .{});
         const name = std.fs.path.basename(item.original());
         // A failure keeps the entry, so Restore works once the cause is
         // fixed, unless the file is gone for good.
-        shell.restore(s.io, item.location(), item.original()) catch |err| return switch (err) {
+        const restored = shell.restore(s.io, item.location(), item.original(), item.identity);
+        restored catch |err| return switch (err) {
             error.Exists => s.notify("{s} exists again: not restored", .{name}),
             error.NoFolder => s.notify("The folder of {s} is gone: not restored", .{name}),
             error.Gone => {
                 s.notify("{s} is no longer in the Trash", .{name});
                 s.trashed.pop();
             },
-            error.Unavailable, error.Failed => s.notify("Could not restore {s}", .{name}),
+            error.Failed => s.notify("Could not restore {s}", .{name}),
         };
         // The popped entry's bytes stay until the next push.
         s.trashed.pop();

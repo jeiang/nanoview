@@ -4,6 +4,8 @@ const ui = @import("nanoui").ui;
 const app = @import("app.zig");
 const view = @import("view.zig");
 const paths = @import("paths.zig");
+const shell = @import("shell.zig");
+const fileops = @import("fileops.zig");
 const preload = @import("preload.zig");
 const animation = @import("animation.zig");
 const decode = @import("decode.zig");
@@ -906,31 +908,68 @@ test "keys typed into the rename field run no actions" {
 }
 
 test "cmd+z restores the newest trashed file and shows it, then has nothing left" {
+    // The Recycle Bin has no stand-in: Restore there asks the real one.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     const f = try Fixture.create();
     defer f.destroy();
     try f.write_png("a.png", 4, 4);
     try f.open("a.png");
     const restore: ui.Shortcut = .{ .key = 'z', .cmd = true };
-    if (builtin.os.tag == .windows) {
-        _ = f.tester.shortcut(restore);
-        return testing.expect(f.tester.containsText("Restore is not available on Windows"));
-    }
     // A stand-in for the Trash, so the test never touches the real one.
     try f.tmp.dir.createDirPath(testing.io, "files");
     try f.write_png("files/b.png", 6, 4);
-    var location_buf: [paths.path_max]u8 = undefined;
-    var original_buf: [paths.path_max]u8 = undefined;
-    const dir = f.dir_buf[0..f.dir_len];
-    f.state.trashed.push(
-        paths.join(dir, "b.png", &original_buf).?,
-        paths.join(dir, "files/b.png", &location_buf).?,
-    );
+    try push_stand_in(f, "files/b.png", "b.png");
     _ = f.tester.shortcut(restore);
     try testing.expect(f.tester.containsText("Restored b.png"));
     try testing.expectEqualStrings("b.png", f.state.basename());
     try testing.expectEqual(@as(f32, 6), f.state.viewport.image_w);
     try testing.expectEqual(@as(u32, 2), f.state.folder.count);
     _ = f.tester.shortcut(restore);
+    try testing.expect(f.tester.containsText("Nothing to restore"));
+}
+
+/// Records `location` in the stand-in Trash as trashed from `original`,
+/// with the `.trashinfo` a FreeDesktop trash keeps beside it.
+fn push_stand_in(f: *Fixture, location: []const u8, original: []const u8) !void {
+    var location_buf: [paths.path_max]u8 = undefined;
+    var original_buf: [paths.path_max]u8 = undefined;
+    const dir = f.dir_buf[0..f.dir_len];
+    const from = paths.join(dir, original, &original_buf).?;
+    const at = paths.join(dir, location, &location_buf).?;
+    try f.tmp.dir.createDirPath(testing.io, "info");
+    var info_buf: [shell.info_max]u8 = undefined;
+    const date: shell.Date = .{
+        .year = 2026,
+        .month = 1,
+        .day = 9,
+        .hour = 0,
+        .minute = 0,
+        .second = 0,
+    };
+    var name_buf: [paths.path_max]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "info/{s}.trashinfo", .{std.fs.path.basename(at)});
+    const info = shell.trash_info(from, date, &info_buf).?;
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = info });
+    f.state.trashed.push(from, at, fileops.node(at).?.identity);
+}
+
+test "cmd+z leaves a file that took the trashed one's place in the Trash" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    try f.tmp.dir.createDirPath(testing.io, "files");
+    try f.write_png("files/b.png", 6, 4);
+    try push_stand_in(f, "files/b.png", "b.png");
+    // The Trash emptied; another b.png trashed later landed at the same place.
+    try f.tmp.dir.rename("files/b.png", f.tmp.dir, "kept.png", testing.io);
+    try f.write_png("files/b.png", 8, 4);
+    _ = f.tester.shortcut(.{ .key = 'z', .cmd = true });
+    try testing.expect(f.tester.containsText("b.png is no longer in the Trash"));
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expectError(error.FileNotFound, f.tmp.dir.access(testing.io, "b.png", .{}));
+    _ = f.tester.shortcut(.{ .key = 'z', .cmd = true });
     try testing.expect(f.tester.containsText("Nothing to restore"));
 }
 

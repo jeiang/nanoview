@@ -96,14 +96,33 @@ pub fn absolute(
     return out[0..count];
 }
 
-/// When another nanoview runs and takes `args`, true: this process is
-/// done. False when none runs or it cannot be reached; start normally.
-pub fn hand_over(io: std.Io, args: []const []const u8) bool {
-    var storage: [paths_max][paths.path_max]u8 = undefined;
-    var resolved: [paths_max][]const u8 = undefined;
-    const files = absolute(io, args, &storage, &resolved);
-    var out: [message_bytes_max]u8 = undefined;
-    return platform.hand(encode(files, &out));
+pub const Error = error{ NoAnswer, NoRuntimeDir, Listen };
+pub const Start = enum { owner, handed };
+
+/// Before the slow startup: this process becomes the running instance,
+/// or hands `args` to the one that is and is done. An error means start
+/// alone, and say why.
+pub fn start(io: std.Io, args: []const []const u8) Error!Start {
+    platform.claim() catch |err| switch (err) {
+        error.Running => {
+            var storage: [paths_max][paths.path_max]u8 = undefined;
+            var resolved: [paths_max][]const u8 = undefined;
+            const files = absolute(io, args, &storage, &resolved);
+            var out: [message_bytes_max]u8 = undefined;
+            if (platform.hand(encode(files, &out))) return .handed;
+            return error.NoAnswer;
+        },
+        else => |e| return e,
+    };
+    return .owner;
+}
+
+pub fn describe(err: Error) []const u8 {
+    return switch (err) {
+        error.NoAnswer => "the running nanoview did not answer",
+        error.NoRuntimeDir => "XDG_RUNTIME_DIR is not set",
+        error.Listen => "cannot listen for other nanoviews",
+    };
 }
 
 const testing = std.testing;

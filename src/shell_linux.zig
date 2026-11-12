@@ -229,16 +229,40 @@ fn move(
     return null;
 }
 
+fn info_path(location: []const u8, out: *[paths.path_max + 1]u8) ?[:0]const u8 {
+    assert(location.len > 0 and location[0] == '/');
+    const files = std.fs.path.dirname(location) orelse return null;
+    const root = std.fs.path.dirname(files) orelse return null;
+    return std.mem.printSentinel(out, "{s}/info/{s}.trashinfo", .{
+        root, std.fs.path.basename(location),
+    }, 0) catch null;
+}
+
+/// Whether the `.trashinfo` of the file at `location` says it came from
+/// `original`, as a FreeDesktop trash checks before it restores.
+pub fn recorded(location: []const u8, original: []const u8) bool {
+    var info_buf: [paths.path_max + 1]u8 = undefined;
+    const info = info_path(location, &info_buf) orelse return false;
+    const raw = linux.openat(at_cwd, info, .{ .NOFOLLOW = true, .CLOEXEC = true }, 0);
+    if (linux.errno(raw) != .SUCCESS) return false;
+    const fd: i32 = @intCast(raw);
+    defer _ = linux.close(fd);
+    var text: [shell.info_max]u8 = undefined;
+    var len: usize = 0;
+    // Each read adds at least one byte or ends: bounded by the buffer.
+    while (len < text.len) {
+        const n = linux.read(fd, text[len..].ptr, text.len - len);
+        if (linux.errno(n) != .SUCCESS or n == 0) break;
+        len += n;
+    }
+    return shell.info_names(text[0..len], location, original);
+}
+
 /// Called once a trashed file is back: its `<trash>/info/<name>.trashinfo`
 /// goes too, so the trash does not list a file that is not there.
 pub fn forget(location: []const u8) void {
-    assert(location.len > 0 and location[0] == '/');
-    const files = std.fs.path.dirname(location) orelse return;
-    const root = std.fs.path.dirname(files) orelse return;
     var info_buf: [paths.path_max + 1]u8 = undefined;
-    const info = std.mem.printSentinel(&info_buf, "{s}/info/{s}.trashinfo", .{
-        root, std.fs.path.basename(location),
-    }, 0) catch return;
+    const info = info_path(location, &info_buf) orelse return;
     // A leftover entry only shows as a broken item in the file manager's
     // trash; the picture itself is back, which is what the user asked for.
     _ = linux.unlinkat(at_cwd, info, 0);
@@ -315,12 +339,29 @@ test "restore moves a trashed file back, forgets it, and never replaces a file" 
     var source_z: [paths.path_max + 1]u8 = undefined;
     var out: [paths.path_max]u8 = undefined;
     const location = move(fd, root, z(source, &source_z).?, source, linux.getuid(), &out).?;
+    const id = @import("fileops.zig").node(location).?.identity;
     try tmp.dir.writeFile(io, .{ .sub_path = "a.png", .data = "new" });
-    try t.expectError(error.Exists, shell.restore(io, location, source));
+    try t.expectError(error.Exists, shell.restore(io, location, source, id));
     try tmp.dir.deleteFile(io, "a.png");
-    try shell.restore(io, location, source);
+    // The record names another file: not the one this run trashed.
+    var info: [shell.info_max]u8 = undefined;
+    var real: [shell.info_max]u8 = undefined;
+    const real_text = try tmp.dir.readFile(io, "Trash/info/a.png.trashinfo", &real);
+    const date: shell.Date = .{
+        .year = 2026,
+        .month = 1,
+        .day = 9,
+        .hour = 3,
+        .minute = 4,
+        .second = 5,
+    };
+    const other = shell.trash_info("/docs/a.png", date, &info).?;
+    try tmp.dir.writeFile(io, .{ .sub_path = "Trash/info/a.png.trashinfo", .data = other });
+    try t.expectError(error.Gone, shell.restore(io, location, source, id));
+    try tmp.dir.writeFile(io, .{ .sub_path = "Trash/info/a.png.trashinfo", .data = real_text });
+    try shell.restore(io, location, source, id);
     var data: [16]u8 = undefined;
     try t.expectEqualStrings("picture", try tmp.dir.readFile(io, "a.png", &data));
     try t.expectError(error.FileNotFound, tmp.dir.access(io, "Trash/info/a.png.trashinfo", .{}));
-    try t.expectError(error.Gone, shell.restore(io, location, source));
+    try t.expectError(error.Gone, shell.restore(io, location, source, id));
 }

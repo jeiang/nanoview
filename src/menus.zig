@@ -46,7 +46,7 @@ pub fn available(s: *const State, action: Action) bool {
     switch (action) {
         .confirm_trash => return s.trash_pending,
         .leave_full_screen => return full_screen(s),
-        .restore => return builtin.os.tag != .windows and s.trashed.top() != null,
+        .restore => return s.trashed.top() != null,
         .pause, .next_frame, .slower, .faster => return s.player.active(),
         .next_page, .previous_page => return s.status == .shown and s.page_count > 1,
         else => {},
