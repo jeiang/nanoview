@@ -2,6 +2,7 @@
 //! Standard JPEG/TIFF orientation metadata is applied, including reflections.
 //! Codec-specific orientation metadata (for example HEIF item transforms) is
 //! not queried; JPEG EXIF also has the existing bounded reader as a fallback.
+//! A frame with a color profile is converted to sRGB by IWICColorTransform.
 const std = @import("std");
 const builtin = @import("builtin");
 const decode = @import("decode.zig");
@@ -25,6 +26,12 @@ const iid_codec_info: Guid = .{ .a = 0xE87A44C4, .b = 0xB76E, .c = 0x4C47, .d = 
 const format_pbgra: Guid = .{ .a = 0x6FDDC324, .b = 0x4E03, .c = 0x4BFE, .d = .{
     0xB1, 0x85, 0x3D, 0x77, 0x76, 0x8D, 0xC9, 0x10,
 } };
+const format_bgra: Guid = .{ .a = 0x6FDDC324, .b = 0x4E03, .c = 0x4BFE, .d = .{
+    0xB1, 0x85, 0x3D, 0x77, 0x76, 0x8D, 0xC9, 0x0F,
+} };
+const contexts_max: u32 = 4; // color contexts asked of a frame
+const context_exif: u32 = 2; // WICColorContextExifColorSpace
+const exif_srgb: u32 = 1;
 const changed_mode: i32 = @bitCast(@as(u32, 0x80010106));
 const bytes_per_pixel: u32 = 4;
 const flip_horizontal: u32 = 8;
@@ -150,6 +157,8 @@ fn decode_frame(
         else => 0,
     };
     const mirrored = exif == 2 or exif == 4 or exif == 5 or exif == 7;
+    const colored = to_srgb(factory, frame);
+    defer if (colored) |source| source.release();
     // Scale at the frame's stored orientation first: the flip-rotator reads
     // pixel by pixel, which is quadratic over a scanline codec, so it only
     // runs on a buffered bitmap of the fitted size.
@@ -161,7 +170,7 @@ fn decode_frame(
     );
     const stored_w = if (swapped) size.height else size.width;
     const stored_h = if (swapped) size.width else size.height;
-    try check(scale(scaler, frame, stored_w, stored_h, interpolation_fant));
+    try check(scale(scaler, colored orelse frame, stored_w, stored_h, interpolation_fant));
     if (turns == 0 and !mirrored) {
         try copy_pixels(factory, scaler, out[0..@intCast(byte_count)], size.width);
         return size;
@@ -223,6 +232,52 @@ fn transform(factory: *Com, source: *Com, flags: u32) !*Com {
     );
     try check(initialize(rotator, source, flags));
     return rotator;
+}
+
+/// The frame converted from its first color context to sRGB, as straight BGRA. Null
+/// when it has none, when that context is sRGB, or when WIC cannot convert it: the
+/// picture then shows with its numbers taken as sRGB, as before.
+fn to_srgb(factory: *Com, frame: *Com) ?*Com {
+    const get_contexts = frame.slot(
+        *const fn (*Com, u32, ?[*]?*Com, *u32) callconv(winapi) i32,
+        9,
+    );
+    var count: u32 = 0;
+    if (get_contexts(frame, 0, null, &count) < 0 or count == 0) return null;
+    var contexts: [contexts_max]?*Com = @splat(null);
+    defer for (contexts) |context| if (context) |c| c.release();
+    const asked = @min(count, contexts_max);
+    for (contexts[0..asked]) |*context| context.* = create(factory, 15) catch return null;
+    if (get_contexts(frame, asked, &contexts, &count) < 0 or count == 0) return null;
+    const source = contexts[0].?;
+    if (is_srgb(source)) return null;
+    const target = create(factory, 15) catch return null;
+    defer target.release();
+    const from_exif = target.slot(*const fn (*Com, u32) callconv(winapi) i32, 5);
+    if (from_exif(target, exif_srgb) < 0) return null;
+    const converter = create(factory, 16) catch return null;
+    const initialize = converter.slot(
+        *const fn (*Com, *Com, *Com, *Com, *const Guid) callconv(winapi) i32,
+        8,
+    );
+    if (initialize(converter, frame, source, target, &format_bgra) < 0) {
+        converter.release();
+        return null;
+    }
+    return converter;
+}
+
+/// IWICColorContext::GetType (slot 6) and GetExifColorSpace (slot 8).
+fn is_srgb(context: *Com) bool {
+    var kind: u32 = 0;
+    const get_type = context.slot(*const fn (*Com, *u32) callconv(winapi) i32, 6);
+    if (get_type(context, &kind) < 0) return true;
+    if (kind != context_exif) return kind == 0; // 0: uninitialized, 1: a profile
+    var space: u32 = 0;
+    const get_space = context.slot(*const fn (*Com, *u32) callconv(winapi) i32, 8);
+    // Only Adobe RGB (2) is converted; uncalibrated (0xFFFF) stays as it is.
+    if (get_space(context, &space) < 0) return true;
+    return space != 2;
 }
 
 fn frame_orientation(frame: *Com) ?u8 {
