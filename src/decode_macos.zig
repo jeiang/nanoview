@@ -39,6 +39,7 @@ extern "c" fn CFDictionaryCreate(
     value_cb: *const anyopaque,
 ) ?*anyopaque;
 extern "c" fn CGImageSourceCreateWithData(data: *anyopaque, options: ?*anyopaque) ?*anyopaque;
+extern "c" fn CGImageSourceGetCount(src: *anyopaque) usize;
 extern "c" fn CGImageSourceCopyPropertiesAtIndex(
     src: *anyopaque,
     index: usize,
@@ -73,9 +74,10 @@ const number_sint32: c_int = 3;
 
 const Native = struct { w: u32, h: u32 };
 
-/// The upright full size from the header and the EXIF orientation.
-fn native_size(src: *anyopaque) !Native {
-    const props = CGImageSourceCopyPropertiesAtIndex(src, 0, null) orelse return error.NotImage;
+/// The upright full size of image `index` from the header and the EXIF orientation.
+fn native_size(src: *anyopaque, index: u32) !Native {
+    const props = CGImageSourceCopyPropertiesAtIndex(src, index, null) orelse
+        return error.NotImage;
     defer CFRelease(props);
     var w: i32 = 0;
     var h: i32 = 0;
@@ -97,7 +99,7 @@ fn native_size(src: *anyopaque) !Native {
     return result;
 }
 
-fn thumbnail(src: *anyopaque, side: i32) !*anyopaque {
+fn thumbnail(src: *anyopaque, index: u32, side: i32) !*anyopaque {
     assert(side > 0);
     const max_n = CFNumberCreate(null, number_sint32, &side) orelse return error.Data;
     defer CFRelease(max_n);
@@ -116,10 +118,33 @@ fn thumbnail(src: *anyopaque, side: i32) !*anyopaque {
         &kCFTypeDictionaryValueCallBacks,
     ) orelse return error.Data;
     defer CFRelease(opts);
-    return CGImageSourceCreateThumbnailAtIndex(src, 0, opts) orelse error.NotImage;
+    return CGImageSourceCreateThumbnailAtIndex(src, index, opts) orelse error.NotImage;
 }
 
-pub fn decode_fit(encoded: []const u8, out: []u8, bounds_w: u32, bounds_h: u32) !Size {
+/// ImageIO's image count: TIFF pages, ICO sizes, and an animation's frames.
+pub fn page_count(encoded: []const u8) u32 {
+    assert(encoded.len > 0);
+    const len: isize = @intCast(encoded.len);
+    const data = CFDataCreateWithBytesNoCopy(null, encoded.ptr, len, kCFAllocatorNull) orelse
+        return 1;
+    defer CFRelease(data);
+    const src = CGImageSourceCreateWithData(data, null) orelse return 1;
+    defer CFRelease(src);
+    return count_of(src);
+}
+
+fn count_of(src: *anyopaque) u32 {
+    const count = CGImageSourceGetCount(src);
+    return @intCast(@min(@max(count, 1), std.math.maxInt(u32)));
+}
+
+pub fn decode_fit(
+    encoded: []const u8,
+    out: []u8,
+    bounds_w: u32,
+    bounds_h: u32,
+    page: u32,
+) !Size {
     assert(bounds_w > 0 and bounds_h > 0);
     if (encoded.len == 0) return error.NotImage;
     const len: isize = @intCast(encoded.len);
@@ -128,14 +153,16 @@ pub fn decode_fit(encoded: []const u8, out: []u8, bounds_w: u32, bounds_h: u32) 
     defer CFRelease(data);
     const src = CGImageSourceCreateWithData(data, null) orelse return error.NotImage;
     defer CFRelease(src);
-    const native = try native_size(src);
+    const pages = count_of(src);
+    if (page >= pages) return error.NoPage;
+    const native = try native_size(src, page);
     const nw: f64 = @floatFromInt(native.w);
     const nh: f64 = @floatFromInt(native.h);
     const bw: f64 = @floatFromInt(bounds_w);
     const bh: f64 = @floatFromInt(bounds_h);
     const s = @min(1, @min(bw / nw, bh / nh));
     const side: i32 = @intFromFloat(@max(1, @ceil(@max(nw, nh) * s)));
-    const img = try thumbnail(src, side);
+    const img = try thumbnail(src, page, side);
     defer CGImageRelease(img);
     const w = CGImageGetWidth(img);
     const h = CGImageGetHeight(img);
@@ -157,5 +184,6 @@ pub fn decode_fit(encoded: []const u8, out: []u8, bounds_w: u32, bounds_h: u32) 
         .height = @intCast(h),
         .native_w = native.w,
         .native_h = native.h,
+        .page_count = pages,
     };
 }

@@ -1,4 +1,5 @@
-//! WIC decodes frame zero into caller-owned premultiplied BGRA storage.
+//! WIC decodes a chosen frame (a TIFF page, an ICO size) into caller-owned
+//! premultiplied BGRA storage.
 //! Standard JPEG/TIFF orientation metadata is applied, including reflections.
 //! Codec-specific orientation metadata (for example HEIF item transforms) is
 //! not queried; JPEG EXIF also has the existing bounded reader as a fallback.
@@ -74,22 +75,39 @@ const win = struct {
     extern "ole32" fn PropVariantClear(value: *PropVariant) callconv(winapi) i32;
 };
 
-pub fn decode_fit(
-    encoded: []const u8,
-    out: []u8,
-    bounds_w: u32,
-    bounds_h: u32,
-) !decode.Size {
-    comptime assert(builtin.os.tag == .windows);
-    if (encoded.len == 0 or encoded.len > decode.file_size_max) return error.InvalidImage;
+/// The COM objects that one decode or page count holds.
+const Opened = struct {
+    uninitialize: bool,
+    factory: *Com,
+    stream: *Com,
+    decoder: *Com,
+
+    fn close(o: Opened) void {
+        o.decoder.release();
+        o.stream.release();
+        o.factory.release();
+        if (o.uninitialize) win.CoUninitialize();
+    }
+
+    /// IWICBitmapDecoder::GetFrameCount (slot 12).
+    fn frame_count(o: Opened) !u32 {
+        var count: u32 = 0;
+        const get_count = o.decoder.slot(*const fn (*Com, *u32) callconv(winapi) i32, 12);
+        try check(get_count(o.decoder, &count));
+        return @max(count, 1);
+    }
+};
+
+fn open_decoder(encoded: []const u8) !Opened {
+    assert(encoded.len > 0 and encoded.len <= decode.file_size_max);
     const uninitialize = try com_initialize();
-    defer if (uninitialize) win.CoUninitialize();
+    errdefer if (uninitialize) win.CoUninitialize();
     var raw: ?*Com = null;
     try check(win.CoCreateInstance(&clsid_factory, null, 1, &iid_factory, &raw));
     const factory = raw orelse return error.WicDecodeFailed;
-    defer factory.release();
+    errdefer factory.release();
     const stream = try memory_stream(factory, encoded);
-    defer stream.release();
+    errdefer stream.release();
     raw = null;
     const open = factory.slot(
         *const fn (*Com, *Com, ?*const Guid, u32, *?*Com) callconv(winapi) i32,
@@ -97,13 +115,47 @@ pub fn decode_fit(
     );
     try check(open(factory, stream, null, 0, &raw));
     const decoder = raw orelse return error.WicDecodeFailed;
-    defer decoder.release();
-    raw = null;
-    const get_frame = decoder.slot(*const fn (*Com, u32, *?*Com) callconv(winapi) i32, 13);
-    try check(get_frame(decoder, 0, &raw));
+    return .{
+        .uninitialize = uninitialize,
+        .factory = factory,
+        .stream = stream,
+        .decoder = decoder,
+    };
+}
+
+/// WIC's frame count; 1 when the file does not open.
+pub fn page_count(encoded: []const u8) u32 {
+    comptime assert(builtin.os.tag == .windows);
+    if (encoded.len == 0 or encoded.len > decode.file_size_max) return 1;
+    const opened = open_decoder(encoded) catch return 1;
+    defer opened.close();
+    return opened.frame_count() catch 1;
+}
+
+pub fn decode_fit(
+    encoded: []const u8,
+    out: []u8,
+    bounds_w: u32,
+    bounds_h: u32,
+    page: u32,
+) !decode.Size {
+    comptime assert(builtin.os.tag == .windows);
+    if (encoded.len == 0 or encoded.len > decode.file_size_max) return error.InvalidImage;
+    const opened = try open_decoder(encoded);
+    defer opened.close();
+    const pages = try opened.frame_count();
+    if (page >= pages) return error.NoPage;
+    var raw: ?*Com = null;
+    const get_frame = opened.decoder.slot(
+        *const fn (*Com, u32, *?*Com) callconv(winapi) i32,
+        13,
+    );
+    try check(get_frame(opened.decoder, page, &raw));
     const frame = raw orelse return error.WicDecodeFailed;
     defer frame.release();
-    return decode_frame(factory, frame, encoded, out, bounds_w, bounds_h);
+    var size = try decode_frame(opened.factory, frame, encoded, out, bounds_w, bounds_h);
+    size.page_count = pages;
+    return size;
 }
 
 fn memory_stream(factory: *Com, encoded: []const u8) !*Com {

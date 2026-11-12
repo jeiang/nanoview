@@ -17,6 +17,7 @@ const keymap_mod = @import("keymap.zig");
 const recent_mod = @import("recent.zig");
 const animation = @import("animation.zig");
 const playback = @import("playback.zig");
+const pages = @import("pages.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -104,6 +105,8 @@ pub const State = struct {
     recent_dir_len: u32 = 0, // 0: the list stays in memory
     recent_failed: bool = false,
     player: animation.Player = .{},
+    page: u32 = 0, // of a multi-page file; nonzero pages decode into `current_pixels`
+    page_count: u32 = 1,
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -356,6 +359,8 @@ pub const State = struct {
         s.promote_failed = false;
         s.promoted = false;
         s.slideshow_at = null;
+        s.page = 0;
+        s.page_count = 1;
         s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
@@ -363,10 +368,12 @@ pub const State = struct {
         const animated = if (slot) |n| s.preload.slots[n].animated else false;
         if (slot != null and !(animated and s.settings.animation)) {
             s.source = s.slot_source(slot.?);
+            s.page_count = s.preload.slots[slot.?].page_count;
             s.status = .shown;
         } else {
             s.read_current();
         }
+        pages.opened(s);
         // The view sets the title on its next frame.
         if (s.window) |w| w.redraw();
         assert(s.status != .empty);
@@ -406,15 +413,21 @@ pub const State = struct {
         }
     }
 
-    fn decode_current(s: *State, bytes: []const u8) !Source {
+    /// Page `page` of the file in `bytes`; also sets `page_count`.
+    pub fn decode_current(s: *State, bytes: []const u8) !Source {
         const system = builtin.os.tag == .macos and !decode.bundled_only(bytes);
-        if (system) return .{ .encoded = bytes };
+        if (system and s.page == 0) {
+            s.page_count = decode.page_count(bytes);
+            return .{ .encoded = bytes };
+        }
         const full = std.math.maxInt(u32);
-        const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
+        const size = decode.decode_fit(bytes, s.current_pixels, full, full, s.page) catch |err| {
             const portable = folder_mod.is_baseline_name(s.basename());
-            if (err == error.Unavailable or portable) return .{ .encoded = bytes };
+            const nanoui_reads = err == error.Unavailable or portable;
+            if (s.page == 0 and nanoui_reads) return .{ .encoded = bytes };
             return err;
         };
+        s.page_count = size.page_count;
         return .{ .pixels = .{
             .bgra = s.current_pixels[0 .. size.width * size.height * 4],
             .width = size.width,

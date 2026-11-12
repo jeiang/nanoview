@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const webp = @import("webp.zig");
 const wuffs = @import("wuffs.zig");
+const animation = @import("animation.zig");
 const assert = std.debug.assert;
 pub const pixels_max: u64 = 64 * 1000 * 1000;
 pub const file_size_max: u32 = 256 * 1024 * 1024;
@@ -11,7 +12,16 @@ pub const supported = switch (builtin.os.tag) {
     .macos, .linux, .windows => true,
     else => false,
 };
-pub const Size = struct { width: u32, height: u32, native_w: u32, native_h: u32 };
+pub const pages_max: u32 = 65535;
+/// `page_count`: the file's pages (TIFF pages, ICO sizes, any ImageIO or WIC images
+/// that are not an animation's frames); 1 for single pictures.
+pub const Size = struct {
+    width: u32,
+    height: u32,
+    native_w: u32,
+    native_h: u32,
+    page_count: u32 = 1,
+};
 
 pub fn fit(w: u32, h: u32, bw: u32, bh: u32) !Size {
     if (w == 0 or h == 0 or bw == 0 or bh == 0) return error.NotImage;
@@ -30,18 +40,47 @@ pub fn fit(w: u32, h: u32, bw: u32, bh: u32) !Size {
     return result;
 }
 
-pub fn decode_fit(bytes: []const u8, out: []u8, bw: u32, bh: u32) !Size {
+/// Decodes page `page` of the file. Only ImageIO and WIC choose a page: gdk-pixbuf
+/// and the bundled decoders read the first, and their count is 1.
+pub fn decode_fit(bytes: []const u8, out: []u8, bw: u32, bh: u32, page: u32) !Size {
     if (bytes.len == 0) return error.NotImage;
     if (bytes.len > file_size_max) return error.TooLarge;
     if (bw == 0 or bh == 0) return error.NotImage;
+    if (page >= pages_max) return error.NoPage;
     const system: anyerror!Size = switch (builtin.os.tag) {
-        .macos => @import("decode_macos.zig").decode_fit(bytes, out, bw, bh),
-        .linux => @import("decode_linux.zig").decode_fit(bytes, out, bw, bh),
-        .windows => @import("decode_windows.zig").decode_fit(bytes, out, bw, bh),
+        .macos => @import("decode_macos.zig").decode_fit(bytes, out, bw, bh, page),
+        .linux => if (page == 0)
+            @import("decode_linux.zig").decode_fit(bytes, out, bw, bh)
+        else
+            error.NoPage,
+        .windows => @import("decode_windows.zig").decode_fit(bytes, out, bw, bh, page),
         else => error.Unavailable,
     };
     // The system's error is the one to report: `Unavailable` selects nanoui's decoders.
-    return system catch |err| (decode_bundled(bytes, out, bw, bh) catch err);
+    var size = system catch |err| {
+        if (page > 0) return err;
+        return decode_bundled(bytes, out, bw, bh) catch err;
+    };
+    size.page_count = pages(bytes, size.page_count);
+    if (page >= size.page_count) return error.NoPage;
+    return size;
+}
+
+/// The page count without decoding, for files that nanoui decodes itself.
+pub fn page_count(bytes: []const u8) u32 {
+    if (bytes.len == 0 or bytes.len > file_size_max) return 1;
+    const count: u32 = switch (builtin.os.tag) {
+        .macos => @import("decode_macos.zig").page_count(bytes),
+        .windows => @import("decode_windows.zig").page_count(bytes),
+        else => 1,
+    };
+    return pages(bytes, count);
+}
+
+/// An animation's frames are not pages.
+fn pages(bytes: []const u8, count: u32) u32 {
+    if (count <= 1 or animation.detect(bytes) != null) return 1;
+    return @min(count, pages_max);
 }
 
 /// True for data that only the bundled decoders read on this system, so the
@@ -142,7 +181,7 @@ test "fit bounds dimensions without enlarging and rejects excessive pixels" {
     try t.expectError(error.TooLarge, fit(8001, 8000, 1, 1));
     try t.expectError(error.NotImage, fit(0, 20, 20, 20));
     try t.expectError(error.NotImage, fit(20, 20, 0, 20));
-    try t.expectError(error.NotImage, decode_fit(&.{}, &.{}, 20, 20));
+    try t.expectError(error.NotImage, decode_fit(&.{}, &.{}, 20, 20, 0));
 }
 
 test "installed extensions intersect a fixed inventory without duplicates" {
