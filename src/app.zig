@@ -25,6 +25,31 @@ pub const message_len_max: u32 = 512;
 /// Room past the longest name, so a name too long gets a message rather
 /// than keys that do nothing.
 pub const rename_bytes_max: u32 = folder_mod.name_len_max * 2;
+/// Clipboard text longer than this is not a list of paths.
+pub const paste_text_max: usize = 64 * 1024;
+pub const paste_lines_max: u32 = 256;
+/// The title and name of a picture pasted from the clipboard.
+pub const clipboard_name = "Clipboard";
+
+/// Where paste reads: the system clipboard, or a test's stand-in. Each
+/// result is allocated with the given allocator; the caller frees it.
+pub const Clipboard = struct {
+    read_files: *const fn (std.mem.Allocator) anyerror!?[][]u8 = system_files,
+    read_text: *const fn (std.mem.Allocator) anyerror!?[]u8 = system_text,
+    read_image: *const fn (std.mem.Allocator) anyerror!?[]u8 = system_image,
+
+    fn system_files(gpa: std.mem.Allocator) anyerror!?[][]u8 {
+        return nanoui.clipboard.readFiles(gpa);
+    }
+
+    fn system_text(gpa: std.mem.Allocator) anyerror!?[]u8 {
+        return nanoui.clipboard.readText(gpa);
+    }
+
+    fn system_image(gpa: std.mem.Allocator) anyerror!?[]u8 {
+        return nanoui.clipboard.readImage(gpa);
+    }
+};
 
 /// Pages for the large buffers. Debug builds fill `alloc` results with
 /// 0xAA, which would commit every page (about 1 GiB) at startup; the raw
@@ -60,7 +85,7 @@ pub const Source = union(enum) {
 pub const State = struct {
     settings: settings_mod.Settings = .{},
     io: std.Io,
-    gpa: std.mem.Allocator, // only for nanoui.dialog.open's result
+    gpa: std.mem.Allocator, // only for nanoui's dialog and clipboard results, freed at once
     file_buffer: []u8, // file_size_max bytes, allocated once in main
     current_pixels: []u8, // current_pixels_max bytes, allocated once at startup
     source: Source = .none,
@@ -99,6 +124,7 @@ pub const State = struct {
     rename_storage: [rename_bytes_max]u8 = undefined,
     rename_buffer: ui.TextBuffer = .{},
     trashed: fileops.TrashStack = .{},
+    clipboard: Clipboard = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -148,8 +174,10 @@ pub const State = struct {
         return s.dir_buf[0..s.dir_len];
     }
 
+    /// The file's name, or `clipboard_name` for a pasted picture.
     pub fn basename(s: *const State) []const u8 {
-        assert(s.path_len > 0);
+        assert(s.status != .empty or s.path_len > 0);
+        if (s.path_len == 0) return clipboard_name;
         return std.fs.path.basename(s.path());
     }
 
@@ -274,8 +302,8 @@ pub const State = struct {
         assert(s.status != .empty);
     }
 
-    pub fn load(s: *State) void {
-        assert(s.path_len > 0);
+    /// What every newly shown picture starts from.
+    fn begin_picture(s: *State) void {
         s.generation +%= 1;
         s.turns_user = 0;
         s.mirror = false;
@@ -284,6 +312,11 @@ pub const State = struct {
         s.promote_failed = false;
         s.slideshow_at = null;
         s.rename_open = false;
+    }
+
+    pub fn load(s: *State) void {
+        assert(s.path_len > 0);
+        s.begin_picture();
         s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
@@ -595,6 +628,103 @@ pub const State = struct {
         } else {
             s.notify("Could not copy {s} to the clipboard", .{s.basename()});
         }
+    }
+
+    /// Files on the clipboard, or text naming them, open like a drop;
+    /// otherwise a picture on it shows untitled.
+    pub fn paste(s: *State) void {
+        assert(s.path_len <= paths.path_max);
+        if (s.paste_files()) return;
+        if (s.paste_text()) return;
+        s.paste_image();
+    }
+
+    fn paste_files(s: *State) bool {
+        const files = (s.clipboard.read_files(s.gpa) catch null) orelse return false;
+        defer nanoui.dialog.freePaths(s.gpa, files);
+        if (files.len == 0) return false;
+        s.open_paths(files);
+        return true;
+    }
+
+    /// Text counts when every line is an absolute path or file URL of
+    /// something that exists: anything else is ordinary text.
+    fn paste_text(s: *State) bool {
+        const text = (s.clipboard.read_text(s.gpa) catch null) orelse return false;
+        defer s.gpa.free(text);
+        if (text.len > paste_text_max) return false;
+        var lines: [paste_lines_max][]const u8 = undefined;
+        var count: u32 = 0;
+        var it = std.mem.tokenizeAny(u8, text, "\r\n");
+        while (it.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t");
+            if (line.len == 0) continue;
+            if (count == paste_lines_max or !s.exists(line)) return false;
+            lines[count] = line;
+            count += 1;
+        }
+        if (count == 0) return false;
+        s.open_paths(lines[0..count]);
+        return true;
+    }
+
+    fn exists(s: *State, input: []const u8) bool {
+        assert(input.len > 0);
+        var buf: [paths.path_max]u8 = undefined;
+        const file = if (std.mem.startsWith(u8, input, "file://"))
+            paths.from_file_url(input, &buf) orelse return false
+        else
+            input;
+        if (file.len > paths.path_max or !std.fs.path.isAbsolute(file)) return false;
+        _ = std.Io.Dir.cwd().statFile(s.io, file, .{}) catch return false;
+        return true;
+    }
+
+    fn paste_image(s: *State) void {
+        const got = s.clipboard.read_image(s.gpa) catch
+            return s.notify("Could not read the clipboard", .{});
+        const bytes = got orelse return s.notify("The clipboard holds no picture", .{});
+        // The one allocation after startup accepted here: the system hands
+        // the clipboard over only in memory it allocates. The bytes move
+        // into file_buffer within its limit and are freed at once.
+        const len = bytes.len;
+        const fits = len > 0 and len <= s.file_buffer.len;
+        if (fits) @memcpy(s.file_buffer[0..len], bytes);
+        s.gpa.free(bytes);
+        if (len == 0) return s.notify("The clipboard holds no picture", .{});
+        if (!fits) return s.notify("The clipboard picture is too large", .{});
+        s.show_clipboard(s.file_buffer[0..len]);
+    }
+
+    /// Shows `bytes`, in file_buffer, as a picture with no file and no
+    /// folder: stepping finds nothing, and file commands say so.
+    fn show_clipboard(s: *State, bytes: []const u8) void {
+        assert(bytes.len > 0 and bytes.ptr == s.file_buffer.ptr);
+        s.preload.lock();
+        if (s.dir_len > 0) s.preload.invalidate(s.dir());
+        s.folder.reset();
+        s.preload.unlock();
+        s.selection.reset();
+        s.selection_only = false;
+        s.dir_len = 0;
+        s.path_len = 0;
+        s.index = null;
+        s.trash_pending = false;
+        s.metadata.len = 0;
+        s.begin_picture();
+        if (s.decode_current(bytes)) |source| {
+            s.source = source;
+            s.status = .shown;
+        } else |_| {
+            s.source = .none;
+            s.status = .failed;
+            s.notify("Cannot show the clipboard picture", .{});
+        }
+        if (s.window) |w| {
+            w.setTitle(clipboard_name);
+            w.redraw();
+        }
+        assert(!s.is_file());
     }
 
     /// Opens the name field with the name before the extension selected;

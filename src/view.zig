@@ -420,6 +420,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
         .copy_image => s.copy_image(),
+        .paste => s.paste(),
         .rename => s.start_rename(),
     }
 }

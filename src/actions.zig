@@ -34,6 +34,7 @@ pub const Action = enum {
     reveal,
     copy_path,
     copy_image,
+    paste,
     rename,
 };
 
@@ -79,6 +80,7 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = 'r', .cmd = true }, .action = .reveal },
     .{ .shortcut = .{ .key = 'c', .cmd = true, .shift = true }, .action = .copy_path },
     .{ .shortcut = .{ .key = 'c', .cmd = true }, .action = .copy_image },
+    .{ .shortcut = .{ .key = 'v', .cmd = true }, .action = .paste },
     .{ .shortcut = .{ .key = key.f(2) }, .action = .rename },
 };
 
