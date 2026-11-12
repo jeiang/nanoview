@@ -94,8 +94,23 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
     // GTK 4 counts the clicks itself: a double click's second press says 2.
     s.ctx.input.click_count = @intCast(@max(1, n_press));
     s.ctx.updateHot();
+    if (surface.windowDrag(s) and beginMove(s, gesture)) return;
     s.ctx.pointerDown();
     s.frame();
+}
+
+fn beginMove(s: *Surface, controller: *anyopaque) bool {
+    const g = &gtk.v4api;
+    const event = g.gtk_event_controller_get_current_event(controller) orelse return false;
+    const device = g.gdk_event_get_device(event) orelse return false;
+    const native_surface = g.gtk_native_get_surface(s.window.gtkwindow.?) orelse return false;
+    var x: f64 = 0;
+    var y: f64 = 0;
+    if (g.gdk_event_get_position(event, &x, &y) == 0) return false;
+    // The event's surface coordinates (not widget coordinates) and its
+    // original device/time let Wayland authorize the interactive move.
+    g.gdk_toplevel_begin_move(native_surface, device, 1, x, y, g.gdk_event_get_time(event));
+    return true;
 }
 
 fn onReleased(gesture: *anyopaque, _: c_int, x: f64, y: f64, data: ?*anyopaque) callconv(.c) void {

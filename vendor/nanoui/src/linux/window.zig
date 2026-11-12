@@ -74,7 +74,7 @@ pub const Window = struct {
         }
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
-        if (!options.decorations) g.gtk_window_set_decorated(win, 0);
+        if (!options.decorations or options.title_bar == .hidden) g.gtk_window_set_decorated(win, 0);
         // Before it is realized: the visual can't change after.
         if (options.transparent and !options.decorations) self.transparent = @import("transparent.zig").setup(win);
         // Before it is realized too, and only then: the surface is a layer

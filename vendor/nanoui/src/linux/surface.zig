@@ -381,6 +381,18 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
     _ = gtk.v3.gdk_event_get_click_count(e, &count);
     const kind = gtk.v3.gdk_event_get_event_type(e);
     s.ctx.input.click_count = count;
+    s.ctx.updateHot();
+    if (windowDrag(s)) {
+        // GTK 3 also sends synthetic double/triple press events. The
+        // actual press already handed the pointer to the window manager.
+        if (kind == gtk.double_press or kind == gtk.triple_press) return 1;
+        var x: f64 = 0;
+        var y: f64 = 0;
+        if (gtk.v3.gdk_event_get_root_coords(e, &x, &y) != 0) {
+            gtk.v3.gtk_window_begin_move_drag(s.window.gtkwindow.?, 1, @intFromFloat(x), @intFromFloat(y), gtk.v3.gdk_event_get_time(e));
+            return 1;
+        }
+    }
     // GTK sends a press for each click and then one more for a double
     // or triple click: that one only tells the count.
     if (kind == gtk.double_press or kind == gtk.triple_press) {
@@ -392,6 +404,13 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
     s.ctx.pointerDown();
     s.frame();
     return 1;
+}
+
+/// Share the frame-part hook with Windows: app-drawn drag boxes and an
+/// empty top band under a hidden title bar, never while full screen.
+pub fn windowDrag(s: *Surface) bool {
+    if (s.ctx.input.button != .left or s.window.isFullScreen()) return false;
+    return s.ctx.framePartAt(s.ctx.input.mouse, s.window.title_bar == .hidden) == .caption;
 }
 
 fn onRelease(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
