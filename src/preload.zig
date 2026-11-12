@@ -6,6 +6,7 @@ const std = @import("std");
 const decode = @import("decode.zig");
 const folder_mod = @import("folder.zig");
 const paths = @import("paths.zig");
+const animation = @import("animation.zig");
 const assert = std.debug.assert;
 
 pub const back_count: u32 = 5;
@@ -27,6 +28,7 @@ pub const Slot = struct {
     height: u32 = 0,
     native_w: u32 = 0, // upright full size in pixels (macOS)
     native_h: u32 = 0,
+    animated: bool = false, // the file plays: the shown picture reads it again
 };
 
 const Job = struct {
@@ -187,15 +189,17 @@ pub const Preload = struct {
         if (!decoded) {
             const bytes = paths.read_file(p.io, file_path, memory) catch return false;
             result.len = @intCast(bytes.len);
+            result.animated = animation.detect(bytes) != null;
             return true;
         }
         const encoded = paths.read_file(p.io, file_path, p.scratch) catch return false;
+        const animated = animation.detect(encoded) != null;
         const size = decode.decode_fit(encoded, memory, job.bounds_w, job.bounds_h) catch |err| {
             const portable = folder_mod.is_baseline_name(std.fs.path.basename(file_path));
             if (err != error.Unavailable and !portable) return false;
             if (encoded.len > memory.len) return false;
             @memcpy(memory[0..encoded.len], encoded);
-            result.* = .{ .encoded = true, .len = @intCast(encoded.len) };
+            result.* = .{ .encoded = true, .len = @intCast(encoded.len), .animated = animated };
             return true;
         };
         result.* = .{
@@ -204,6 +208,7 @@ pub const Preload = struct {
             .native_w = size.native_w,
             .native_h = size.native_h,
             .len = size.width * size.height * 4,
+            .animated = animated,
         };
         assert(result.len <= memory.len);
         return true;

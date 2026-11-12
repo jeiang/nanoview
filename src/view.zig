@@ -10,6 +10,7 @@ const preload = @import("preload.zig");
 const actions = @import("actions.zig");
 const keymap = @import("keymap.zig");
 const settings_mod = @import("settings.zig");
+const playback = @import("playback.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -26,6 +27,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     c.wants_moves = c.input.down;
     keys(s, c);
     slideshow(s, c);
+    if (playback.tick(s, c.time)) |wait| c.frameIn(wait);
 
     const root = ui.div(c).sizeFull().center().bg(background(s, c));
     defer root.end();
@@ -289,12 +291,14 @@ fn info(s: *State, c: *ui.Context) void {
     const pw: u32 = @intFromFloat(vp.image_w);
     const ph: u32 = @intFromFloat(vp.image_h);
     const name = s.basename();
+    var frame_buf: [64]u8 = undefined;
+    const frame = playback.info(s, &frame_buf);
     const line = if (s.index) |i|
-        c.print("{s} · {d}×{d} · {d}% · {d}/{d}", .{
-            name, pw, ph, vp.percent(), i + 1, s.folder.count,
+        c.print("{s} · {d}×{d} · {d}% · {d}/{d}{s}", .{
+            name, pw, ph, vp.percent(), i + 1, s.folder.count, frame,
         })
     else
-        c.print("{s} · {d}×{d} · {d}%", .{ name, pw, ph, vp.percent() });
+        c.print("{s} · {d}×{d} · {d}%{s}", .{ name, pw, ph, vp.percent(), frame });
     const box = ui.div(c).absolute().offset(12, c.size.h - 60).px(8).py(4).rounded(6)
         .bg(ui.Color.black.alpha(0.6));
     defer box.end();
@@ -451,6 +455,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .confirm_trash => unreachable,
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
+        .pause, .next_frame, .slower, .faster => playback.perform(s, action),
     }
 }
 

@@ -15,6 +15,8 @@ const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
 const keymap_mod = @import("keymap.zig");
 const recent_mod = @import("recent.zig");
+const animation = @import("animation.zig");
+const playback = @import("playback.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -101,6 +103,7 @@ pub const State = struct {
     recent_dir_buf: [paths.path_max]u8 = undefined,
     recent_dir_len: u32 = 0, // 0: the list stays in memory
     recent_failed: bool = false,
+    player: animation.Player = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -112,9 +115,11 @@ pub const State = struct {
         pool: []u8,
         scratch: []u8,
         current_pixels: []u8,
+        animation_memory: []u8,
     ) void {
         assert(file_buffer.len == file_size_max);
         assert(current_pixels.len == current_pixels_max);
+        assert(animation_memory.len == animation.memory_bytes);
         folder_mod.init_extensions();
         s.* = .{
             .io = io,
@@ -122,6 +127,7 @@ pub const State = struct {
             .file_buffer = file_buffer,
             .current_pixels = current_pixels,
             .keymap = .defaults(),
+            .player = .{ .memory = animation_memory },
         };
         s.preload.init(io, &s.folder, pool, scratch);
         s.random_state = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
@@ -320,6 +326,7 @@ pub const State = struct {
     }
 
     fn fail(s: *State) void {
+        s.player.stop();
         s.generation +%= 1;
         s.source = .none;
         s.status = .failed;
@@ -340,6 +347,7 @@ pub const State = struct {
 
     pub fn load(s: *State) void {
         assert(s.path_len > 0);
+        s.player.stop();
         s.generation +%= 1;
         s.turns_user = 0;
         s.mirror = false;
@@ -351,8 +359,10 @@ pub const State = struct {
         s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
-        if (slot) |n| {
-            s.source = s.slot_source(n);
+        // An animation plays from the file's bytes, which the slot does not keep.
+        const animated = if (slot) |n| s.preload.slots[n].animated else false;
+        if (slot != null and !(animated and s.settings.animation)) {
+            s.source = s.slot_source(slot.?);
             s.status = .shown;
         } else {
             s.read_current();
@@ -380,6 +390,10 @@ pub const State = struct {
     fn read_current(s: *State) void {
         assert(s.path_len > 0);
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
+            if (playback.play(s, bytes)) {
+                s.status = .shown;
+                return;
+            }
             s.source = s.decode_current(bytes) catch {
                 s.source = .none;
                 s.status = .failed;
@@ -414,6 +428,8 @@ pub const State = struct {
     /// keep the viewport, generation and turns.
     pub fn promote(s: *State) void {
         assert(s.source == .pixels and !s.promote_failed);
+        // An animation's canvas is full size, and its file must stay in `file_buffer`.
+        assert(!s.player.active());
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
             s.source = s.decode_current(bytes) catch {
                 s.promote_failed = true;
@@ -586,6 +602,7 @@ pub const State = struct {
 
     /// Back to the empty window.
     fn clear(s: *State) void {
+        s.player.stop();
         s.status = .empty;
         s.source = .none;
         s.index = null;
@@ -617,10 +634,12 @@ pub const State = struct {
     /// picture by key, so new content needs a new key.
     pub fn picture_key(s: *const State, buf: *[16]u8) []const u8 {
         const prefix = switch (s.source) {
-            .pixels => if (s.promoted) "f" else "p",
+            .pixels => if (s.player.active()) "a" else if (s.promoted) "f" else "p",
             else => "e",
         };
-        const key = std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, s.generation }) catch unreachable;
+        // Each frame of an animation is new content.
+        const number = if (s.player.active()) s.player.serial else s.generation;
+        const key = std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, number }) catch unreachable;
         assert(key.len > 1);
         return key;
     }
