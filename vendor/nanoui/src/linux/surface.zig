@@ -56,6 +56,8 @@ pub const Surface = struct {
     in_frame: bool = false,
     pending: bool = false,
     active_signal: c_ulong = 0,
+    zoom_gesture: ?*anyopaque = null,
+    zoom_scale: f64 = 1,
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
@@ -112,12 +114,15 @@ pub const Surface = struct {
         gtk.connect(area, "focus-in-event", @ptrCast(&onFocusIn), self);
         gtk.connect(area, "focus-out-event", @ptrCast(&onFocusOut), self);
         gtk.connect(area, "realize", @ptrCast(&onRealize), self);
+        self.zoom_gesture = gtk.v3.gtk_gesture_zoom_new(area);
+        attachZoom(self, self.zoom_gesture.?);
     }
 
     pub fn destroy(self: *Surface) void {
         const g = &gtk.api;
         if (self.active_signal != 0) g.g_signal_handler_disconnect(self.window.gtkwindow.?, self.active_signal);
         self.watches.stop();
+        if (!gtk.v4) if (self.zoom_gesture) |gesture| g.g_object_unref(gesture);
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.close_idle != 0) _ = g.g_source_remove(self.close_idle);
@@ -430,27 +435,46 @@ fn onScroll(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int
     s.setMouse(e);
     var dx: f64 = 0;
     var dy: f64 = 0;
-    var delta: f32 = 0;
     if (gtk.v3.gdk_event_get_scroll_deltas(e, &dx, &dy) != 0) {
-        // Smooth deltas are in lines of about 40 pixels; up is negative.
-        delta = @floatCast(-dy * 40);
+        scrollAxes(s, @floatCast(-dx * 40), @floatCast(-dy * 40), true);
     } else {
         var dir: c_int = 0;
         _ = gtk.v3.gdk_event_get_scroll_direction(e, &dir);
-        delta = if (dir == 0) 48 else if (dir == 1) -48 else 0;
+        scrollAxes(s, if (dir == 2) 48 else if (dir == 3) -48 else 0, if (dir == 0) 48 else if (dir == 1) -48 else 0, false);
     }
-    scrolled(s, delta);
     return 1;
 }
 
 pub fn scrolled(s: *Surface, delta: f32) void {
-    if (s.ctx.applyScroll(delta)) {
+    scrollAxes(s, 0, delta, false);
+}
+
+pub fn scrollAxes(s: *Surface, dx: f32, dy: f32, precise: bool) void {
+    s.ctx.input.precise = precise;
+    if (s.ctx.applyScroll(dy)) {
         s.frame();
         s.ctx.updateHot();
     } else if (s.ctx.wants_wheel) {
-        s.ctx.input.scroll = .{ .y = delta };
+        s.ctx.input.scroll = .{ .x = dx, .y = dy };
         s.frame();
     }
+}
+
+pub fn attachZoom(s: *Surface, gesture: *anyopaque) void {
+    gtk.connect(gesture, "begin", @ptrCast(&zoomBegin), s);
+    gtk.connect(gesture, "scale-changed", @ptrCast(&zoomChanged), s);
+}
+
+fn zoomBegin(_: *anyopaque, _: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
+    of(data).zoom_scale = 1;
+}
+
+fn zoomChanged(_: *anyopaque, scale: f64, data: ?*anyopaque) callconv(.c) void {
+    const s = of(data);
+    if (!std.math.isFinite(scale) or scale <= 0) return;
+    s.ctx.input.zoom *= @floatCast(scale / s.zoom_scale);
+    s.zoom_scale = scale;
+    s.frame();
 }
 
 fn onActive(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) void {

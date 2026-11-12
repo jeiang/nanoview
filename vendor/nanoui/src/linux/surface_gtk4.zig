@@ -40,6 +40,9 @@ pub fn attachArea(s: *Surface) void {
     const scroll = g4.gtk_event_controller_scroll_new(3);
     gtk.connect(scroll, "scroll", @ptrCast(&onScroll), s);
     g4.gtk_widget_add_controller(area, scroll);
+    const zoom = g4.gtk_gesture_zoom_new();
+    surface.attachZoom(s, zoom);
+    g4.gtk_widget_add_controller(area, zoom);
     const key = g4.gtk_event_controller_key_new();
     g4.gtk_event_controller_key_set_im_context(key, s.im);
     gtk.connect(key, "key-pressed", @ptrCast(&onKey), s);
@@ -104,9 +107,11 @@ fn onLeave(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
     surface.left(of(data));
 }
 
-fn onScroll(_: *anyopaque, _: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
-    // In lines of about 40 pixels, as GTK 3's smooth deltas; up is negative.
-    surface.scrolled(of(data), @floatCast(-dy * 40));
+fn onScroll(controller: *anyopaque, dx: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
+    const event = gtk.v4api.gtk_event_controller_get_current_event(controller);
+    const precise = if (event) |e| gtk.v4api.gdk_scroll_event_get_direction(e) == 4 else false;
+    const unit: f64 = if (precise) 40 else 48;
+    surface.scrollAxes(of(data), @floatCast(-dx * unit), @floatCast(-dy * unit), precise);
     return 1;
 }
 

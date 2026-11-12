@@ -89,6 +89,7 @@ pub const Api = struct {
 /// GTK 3's own: its main loop, window placement, events as structs, the
 /// clipboard and dialogs that wait.
 pub const Api3 = struct {
+    gtk_gesture_zoom_new: *const fn (widget: *Widget) callconv(.c) *anyopaque,
     gtk_init_check: *const fn (argc: ?*c_int, argv: ?*anyopaque) callconv(.c) c_int,
     gtk_main: *const fn () callconv(.c) void,
     gtk_main_quit: *const fn () callconv(.c) void,
@@ -147,6 +148,9 @@ pub const Api3 = struct {
 /// GTK 4's own: one child per window, event controllers instead of event
 /// signals, a draw function, and a clipboard and dialogs that answer later.
 pub const Api4 = struct {
+    gtk_gesture_zoom_new: *const fn () callconv(.c) *anyopaque,
+    gtk_event_controller_get_current_event: *const fn (controller: *anyopaque) callconv(.c) ?*anyopaque,
+    gdk_scroll_event_get_direction: *const fn (event: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn () callconv(.c) c_int,
     gtk_window_new: *const fn () callconv(.c) *Widget,
     gtk_window_set_child: *const fn (w: *Widget, child: ?*Widget) callconv(.c) void,
