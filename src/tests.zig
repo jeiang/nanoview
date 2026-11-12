@@ -106,6 +106,18 @@ test "right walks the folder in natural order and wraps" {
     try testing.expectEqualStrings("a10.png", f.state.basename());
 }
 
+test "mouse side buttons walk the folder" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a1.png", 4, 4);
+    try f.write_png("a2.png", 4, 4);
+    try f.open("a1.png");
+    f.tester.clickWith(.forward, 240, 180);
+    try testing.expectEqualStrings("a2.png", f.state.basename());
+    f.tester.clickWith(.back, 240, 180);
+    try testing.expectEqualStrings("a1.png", f.state.basename());
+}
+
 test "a pinch zooms and 0 fits again" {
     const f = try Fixture.create();
     defer f.destroy();
