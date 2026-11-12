@@ -7,6 +7,18 @@ section that matches its tag.
 
 ## [Unreleased]
 
+### Added
+
+- A release archive for Windows on arm64.
+
+### Changed
+
+- nanoui v0.14.0 is vendored in `vendor/nanoui`, so nanoview can carry patches to it.
+
+### Fixed
+
+- A file that cannot be moved to the Trash now says so in the window.
+
 ## [0.2.0] - 2026-11-10
 
 ### Added

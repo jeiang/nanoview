@@ -11,6 +11,7 @@ const preload_mod = @import("preload.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max: u32 = 256 * 1024 * 1024;
+pub const message_len_max: u32 = 512;
 
 /// Pages for the large buffers. Debug builds fill `alloc` results with
 /// 0xAA, which would commit every page (about 1 GiB) at startup; the raw
@@ -65,6 +66,9 @@ pub const State = struct {
     turns_user: u2 = 0,
     info_shown: bool = false,
     drag_last: ?ui.Point = null,
+    message_buf: [message_len_max]u8 = undefined,
+    message_len: u32 = 0,
+    message_until: ?f64 = null, // on the view's clock; null until a frame shows it
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -233,7 +237,10 @@ pub const State = struct {
     pub fn trash(s: *State) void {
         if (s.status == .empty) return;
         assert(s.path_len > 0);
-        if (!nanoui.shell.trash(s.path())) return;
+        if (!nanoui.shell.trash(s.path())) {
+            s.notify("Could not move {s} to the Trash", .{s.basename()});
+            return;
+        }
         if (s.index) |i| {
             s.preload.lock();
             s.folder.remove(i);
@@ -250,6 +257,28 @@ pub const State = struct {
             s.clear();
         }
         assert(s.status == .empty or s.path_len > 0);
+    }
+
+    /// Tells the user what a command did or could not do; the view shows it
+    /// for a few seconds. A text too long for the buffer is cut.
+    pub fn notify(s: *State, comptime fmt: []const u8, args: anytype) void {
+        var writer: std.Io.Writer = .fixed(&s.message_buf);
+        writer.print(fmt, args) catch {};
+        var len = writer.end;
+        // A cut may land inside a UTF-8 sequence: drop its bytes.
+        if (len == message_len_max) {
+            while (len > 0 and s.message_buf[len - 1] & 0xC0 == 0x80) len -= 1;
+            if (len > 0 and s.message_buf[len - 1] >= 0xC0) len -= 1;
+        }
+        s.message_len = @intCast(len);
+        s.message_until = null;
+        if (s.window) |w| w.redraw();
+        assert(s.message_len <= message_len_max);
+    }
+
+    pub fn message(s: *const State) []const u8 {
+        assert(s.message_len <= message_len_max);
+        return s.message_buf[0..s.message_len];
     }
 
     /// Back to the empty window.

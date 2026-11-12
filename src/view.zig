@@ -7,6 +7,7 @@ const paths = @import("paths.zig");
 const orientation = @import("orientation.zig");
 const viewport = @import("viewport.zig");
 const preload = @import("preload.zig");
+const actions = @import("actions.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -26,7 +27,12 @@ pub fn view(s: *State, c: *ui.Context) void {
     const root = ui.div(c).sizeFull().center().bg(c.theme.background);
     defer root.end();
     drops(s, c, root.index);
+    body(s, c);
+    message(s, c);
+}
 
+fn body(s: *State, c: *ui.Context) void {
+    assert(s.path_len <= paths.path_max);
     if (s.status == .empty) {
         ui.text(c, hint, .{ .color = c.theme.muted });
         return;
@@ -45,6 +51,26 @@ pub fn view(s: *State, c: *ui.Context) void {
     if (s.source == .pixels and !s.promote_failed and needs_promote(s, c)) s.promote();
     draw(s, c, s.picture_key(&key_buf));
     if (s.info_shown) info(s, c);
+}
+
+const message_seconds: f64 = 4;
+
+/// What `State.notify` last said, for a few seconds, above the info line.
+fn message(s: *State, c: *ui.Context) void {
+    assert(s.message_len <= app.message_len_max);
+    if (s.message_len == 0) return;
+    // A command has no clock: the first frame that sees its message starts it.
+    if (s.message_until == null) s.message_until = c.time + message_seconds;
+    const left = s.message_until.? - c.time;
+    if (left <= 0) {
+        s.message_len = 0;
+        return;
+    }
+    c.frameIn(@floatCast(left));
+    const box = ui.div(c).absolute().offset(12, c.size.h - 72).px(8).py(4).rounded(6)
+        .bg(ui.Color.black.alpha(0.6));
+    defer box.end();
+    ui.text(c, s.message(), .{ .size = info_text_size, .color = ui.Color.white });
 }
 
 /// The upright size and turns of a newly loaded picture, and a fitted view.
@@ -242,13 +268,13 @@ fn in_title_band(s: *const State, c: *const ui.Context) bool {
 }
 
 /// A key as a shortcut; off macOS bare keys arrive as keys or characters.
-fn key_hit(c: *ui.Context, comptime sc: ui.Shortcut) bool {
-    comptime assert(sc.key != 0);
+fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
+    assert(sc.key != 0);
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
     // `?Key`: nanoui does not export its key enum from `ui`.
     const Key = @FieldType(@FieldType(ui.Context, "input"), "key");
-    const want: Key = comptime switch (sc.key) {
+    const want: Key = switch (sc.key) {
         ui.Shortcut.left => .left,
         ui.Shortcut.right => .right,
         ui.Shortcut.escape => .escape,
@@ -266,33 +292,38 @@ fn key_hit(c: *ui.Context, comptime sc: ui.Shortcut) bool {
     return true;
 }
 
+/// One key event runs at most one action.
 fn keys(s: *State, c: *ui.Context) void {
+    assert(s.path_len <= paths.path_max);
+    for (actions.bindings) |b| {
+        if (!key_hit(c, b.shortcut)) continue;
+        perform(s, c, b.action);
+        return;
+    }
+}
+
+pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
     assert(s.path_len <= paths.path_max);
     const vp = &s.viewport;
     const shown = s.status == .shown;
     const cx = c.size.w / 2;
     const cy = c.size.h / 2;
     assert(cx >= 0 and cy >= 0);
-    if (key_hit(c, .{ .key = 'o', .cmd = true })) s.open_dialog();
-    if (key_hit(c, .{ .key = ui.Shortcut.right })) s.step(1);
-    if (key_hit(c, .{ .key = ui.Shortcut.left })) s.step(-1);
-    const zoom_in = key_hit(c, .{ .key = '=' }) or key_hit(c, .{ .key = '=', .shift = true }) or
-        key_hit(c, .{ .key = '+' });
-    if (zoom_in and shown) vp.zoom_about(cx, cy, viewport.zoom_step);
-    if (key_hit(c, .{ .key = '-' }) and shown) vp.zoom_about(cx, cy, 1 / viewport.zoom_step);
-    if (key_hit(c, .{ .key = '0' }) and shown) vp.set_fit();
-    if (key_hit(c, .{ .key = '1' }) and shown) vp.set_actual();
-    if (key_hit(c, .{ .key = 'f' })) {
-        if (s.window) |w| w.setFullScreen(!w.isFullScreen());
+    switch (action) {
+        .open => s.open_dialog(),
+        .next => s.step(1),
+        .previous => s.step(-1),
+        .zoom_in => if (shown) vp.zoom_about(cx, cy, viewport.zoom_step),
+        .zoom_out => if (shown) vp.zoom_about(cx, cy, 1 / viewport.zoom_step),
+        .fit => if (shown) vp.set_fit(),
+        .actual => if (shown) vp.set_actual(),
+        .full_screen => if (s.window) |w| w.setFullScreen(!w.isFullScreen()),
+        .leave_full_screen => if (s.window) |w| w.setFullScreen(false),
+        .rotate_right => rotate(s, c, 1),
+        .rotate_left => rotate(s, c, 3),
+        .info => s.info_shown = !s.info_shown,
+        .trash => s.trash(),
+        .reveal => s.reveal(),
+        .copy_path => s.copy_path(),
     }
-    if (key_hit(c, .{ .key = ui.Shortcut.escape })) {
-        if (s.window) |w| w.setFullScreen(false);
-    }
-    if (key_hit(c, .{ .key = 'r' })) rotate(s, c, 1);
-    if (key_hit(c, .{ .key = 'l' })) rotate(s, c, 3);
-    if (key_hit(c, .{ .key = 'i' })) s.info_shown = !s.info_shown;
-    if (key_hit(c, .{ .key = ui.Shortcut.forward_delete }) or
-        key_hit(c, .{ .key = ui.Shortcut.backspace, .cmd = true })) s.trash();
-    if (key_hit(c, .{ .key = 'r', .cmd = true })) s.reveal();
-    if (key_hit(c, .{ .key = 'c', .cmd = true, .shift = true })) s.copy_path();
 }

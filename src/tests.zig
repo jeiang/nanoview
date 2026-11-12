@@ -16,6 +16,7 @@ test {
     _ = @import("ds_store.zig");
     _ = @import("sort_order.zig");
     _ = @import("explorer_sort.zig");
+    _ = @import("actions.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -204,4 +205,18 @@ test "opening another folder empties the slots" {
     for (f.state.preload.slots) |slot| {
         try testing.expect(slot.state == .empty or slot.state == .loading);
     }
+}
+
+test "a failed trash says so, then the message goes away" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    // Nothing left to move: every system's trash refuses.
+    try f.tmp.dir.deleteFile(testing.io, "a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.forward_delete });
+    try testing.expect(f.tester.containsText("Could not move a.png to the Trash"));
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    f.tester.advance(5);
+    try testing.expect(!f.tester.containsText("Could not move"));
 }
