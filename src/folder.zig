@@ -14,9 +14,9 @@ const scan_entries_max: u32 = entries_max * 4;
 /// Lower case, without dots. Initialized before folder scans or the worker start.
 pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
     &.{
-        "png", "jpg",  "jpeg", "jpe", "jfif", "gif", "heic", "heif", "webp", "avif",
-        "tif", "tiff", "bmp",  "ico", "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
-        "pbm",
+        "png", "jpg",  "jpeg", "jpe",  "jfif", "gif", "heic", "heif", "webp", "avif",
+        "tif", "tiff", "bmp",  "ico",  "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
+        "pbm", "jxl",  "mpo",  "pict", "pct",  "dng", "cr3",  "rw2",  "rwl",  "3fr",
     }
 else
     baseline_extensions;

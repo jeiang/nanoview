@@ -46,6 +46,14 @@
 				<string>com.ilm.openexr-image</string>
 				<string>com.sgi.sgi-image</string>
 				<string>public.pbm</string>
+				<string>public.jpeg-xl</string>
+				<string>public.mpo-image</string>
+				<string>com.apple.pict</string>
+				<string>com.adobe.raw-image</string>
+				<string>com.canon.cr3-raw-image</string>
+				<string>com.panasonic.rw2-raw-image</string>
+				<string>com.leica.rwl-raw-image</string>
+				<string>com.hasselblad.3fr-raw-image</string>
 			</array>
 		</dict>
 	</array>
