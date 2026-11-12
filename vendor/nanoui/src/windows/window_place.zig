@@ -25,9 +25,10 @@ comptime {
     std.debug.assert(@sizeOf(WINDOWPLACEMENT) == 44);
 }
 
-extern "user32" fn GetWindowPlacement(hwnd: w.HWND, wp: *WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
-extern "user32" fn SetWindowPlacement(hwnd: w.HWND, wp: *const WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
+pub extern "user32" fn GetWindowPlacement(hwnd: w.HWND, wp: *WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
+pub extern "user32" fn SetWindowPlacement(hwnd: w.HWND, wp: *const WINDOWPLACEMENT) callconv(.winapi) w.BOOL;
 extern "user32" fn MonitorFromRect(rect: *const w.RECT, flags: u32) callconv(.winapi) ?*anyopaque;
+extern "user32" fn AdjustWindowRectExForDpi(rect: *w.RECT, style: u32, menu: w.BOOL, ex: u32, dpi: u32) callconv(.winapi) w.BOOL;
 
 const SW_SHOWMAXIMIZED: u32 = 3;
 
@@ -76,21 +77,22 @@ pub fn monitorSize(self: *Window) [2]f64 {
 /// Sizes the window so its client area is `width` × `height` points.
 pub fn setSize(self: *Window, width: f64, height: f64) void {
     const h = self.hwnd orelse return;
+    if (self.full_screen or !std.math.isFinite(width) or !std.math.isFinite(height)) return;
     const s = dpiScale(self);
-    const cw: i32 = @intFromFloat(width * s);
-    const ch: i32 = @intFromFloat(height * s);
-    // The window's own style decides the non-client border a client area
-    // of this size needs: a `WS_POPUP` has none, and a chromeless window
-    // has no top one (`chrome.zig` reclaims it).
+    const area = workArea(self) orelse return;
+    const cw: i32 = @intFromFloat(@min(@max(1, width * s), @as(f64, @floatFromInt(area.right - area.left))));
+    const ch: i32 = @intFromFloat(@min(@max(1, height * s), @as(f64, @floatFromInt(area.bottom - area.top))));
     const style: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
-    if (chrome.chromeless(self)) {
-        const outer = chrome.outerSize(style, cw, ch);
-        _ = w.SetWindowPos(h, null, 0, 0, outer[0], outer[1], Window.set_size_flags);
-        return;
-    }
+    const ex: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_EXSTYLE))));
     var r: w.RECT = .{ .right = cw, .bottom = ch };
-    _ = w.AdjustWindowRectEx(&r, style, 0, 0);
-    _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, Window.set_size_flags);
+    if (AdjustWindowRectExForDpi(&r, style, 0, ex, w.GetDpiForWindow(h)) == 0) return;
+    const ow = @min(area.right - area.left, r.right - r.left);
+    const oh = @min(area.bottom - area.top, if (chrome.chromeless(self)) r.bottom else r.bottom - r.top);
+    var old: w.RECT = .{};
+    if (w.GetWindowRect(h, &old) == 0) return;
+    const x = std.math.clamp(old.left, area.left, area.right - ow);
+    const y = std.math.clamp(old.top, area.top, area.bottom - oh);
+    _ = w.SetWindowPos(h, null, x, y, ow, oh, w.SWP_NOZORDER | w.SWP_NOACTIVATE);
 }
 
 pub fn setPosition(self: *Window, x: f64, y: f64) void {

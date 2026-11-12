@@ -218,13 +218,11 @@ const window_screen_share: f64 = 0.8;
 
 /// The window takes the picture's size, within 80 % of the screen.
 fn resize_window(s: *State, c: *const ui.Context) void {
-    // Windows has no setSize in nanoui.
-    if (comptime !@hasDecl(@import("nanoui").Window, "setSize")) return;
     const w = s.window orelse return;
     if (w.isFullScreen()) return;
     const m = w.monitorSize();
-    // GTK 4 reports the window's own size as the screen's: fitting to it
-    // would shrink the window with every picture.
+    // Before GTK realization (or if monitor lookup fails), nanoui falls
+    // back to content size: fitting to it would shrink each picture.
     const content = w.contentSize();
     if (m[0] <= 0 or m[1] <= 0 or (m[0] == content[0] and m[1] == content[1])) return;
     assert(c.scale > 0);
@@ -265,6 +263,10 @@ fn pointer(s: *State, c: *ui.Context) void {
     assert(s.status == .shown);
     const in = &c.input;
     const vp = &s.viewport;
+    if (in.pressed and (in.button == .back or in.button == .forward)) {
+        perform(s, c, if (in.button == .back) .previous else .next);
+        return;
+    }
     if (in.zoom != 1 and in.zoom > 0) {
         vp.zoom_about(in.mouse.x, in.mouse.y, in.zoom);
         vp.pan(in.pan.x, in.pan.y);

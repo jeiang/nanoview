@@ -28,7 +28,7 @@ pub fn attachArea(s: *Surface) void {
     } else g4.gtk_drawing_area_set_draw_func(area, onDraw, s, null);
     gtk.connect(area, "resize", @ptrCast(&onResize), s);
     const click = g4.gtk_gesture_click_new();
-    g4.gtk_gesture_single_set_button(click, 1);
+    g4.gtk_gesture_single_set_button(click, 0);
     gtk.connect(click, "pressed", @ptrCast(&onPressed), s);
     gtk.connect(click, "released", @ptrCast(&onReleased), s);
     g4.gtk_widget_add_controller(area, click);
@@ -40,6 +40,9 @@ pub fn attachArea(s: *Surface) void {
     const scroll = g4.gtk_event_controller_scroll_new(3);
     gtk.connect(scroll, "scroll", @ptrCast(&onScroll), s);
     g4.gtk_widget_add_controller(area, scroll);
+    const zoom = g4.gtk_gesture_zoom_new();
+    surface.attachZoom(s, zoom);
+    g4.gtk_widget_add_controller(area, zoom);
     const key = g4.gtk_event_controller_key_new();
     g4.gtk_event_controller_key_set_im_context(key, s.im);
     gtk.connect(key, "key-pressed", @ptrCast(&onKey), s);
@@ -81,6 +84,13 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
     const s = of(data);
     gtk.api.gtk_widget_grab_focus(s.area);
     at(s, gesture, x, y);
+    const button = gtk.v4api.gtk_gesture_single_get_current_button(gesture);
+    s.ctx.input.button = switch (button) {
+        1 => .left,
+        8 => .back,
+        9 => .forward,
+        else => return,
+    };
     // GTK 4 counts the clicks itself: a double click's second press says 2.
     s.ctx.input.click_count = @intCast(@max(1, n_press));
     s.ctx.updateHot();
@@ -91,6 +101,8 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
 fn onReleased(gesture: *anyopaque, _: c_int, x: f64, y: f64, data: ?*anyopaque) callconv(.c) void {
     const s = of(data);
     at(s, gesture, x, y);
+    const button = gtk.v4api.gtk_gesture_single_get_current_button(gesture);
+    if (button != 1 and button != 8 and button != 9) return;
     surface.released(s);
 }
 
@@ -104,9 +116,12 @@ fn onLeave(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
     surface.left(of(data));
 }
 
-fn onScroll(_: *anyopaque, _: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
-    // In lines of about 40 pixels, as GTK 3's smooth deltas; up is negative.
-    surface.scrolled(of(data), @floatCast(-dy * 40));
+fn onScroll(controller: *anyopaque, dx: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
+    const event = gtk.v4api.gtk_event_controller_get_current_event(controller);
+    const device = if (event) |e| gtk.v4api.gdk_event_get_device(e) else null;
+    const precise = if (device) |d| gtk.v4api.gdk_device_get_source(d) == 4 else false;
+    const unit: f64 = if (precise) 40 else 48;
+    surface.scrollAxes(of(data), @floatCast(-dx * unit), @floatCast(-dy * unit), precise);
     return 1;
 }
 

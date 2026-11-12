@@ -60,6 +60,8 @@ pub const Window = struct {
     on_fullscreen: ?Callback = null,
     closed: bool = false,
     full_screen: bool = false,
+    fullscreen_style: isize = 0,
+    fullscreen_placement: place.WINDOWPLACEMENT = .{},
     view: ?ui.View = null,
     /// The page, when the window shows one instead of native UI.
     page: ?*Page = null,
@@ -422,8 +424,24 @@ pub const Window = struct {
     }
 
     pub fn setFullScreen(self: *Window, on: bool) void {
+        if (on == self.full_screen) return;
+        const h = self.hwnd orelse return;
+        if (on) {
+            const m = place.monitor(self) orelse return;
+            if (place.GetWindowPlacement(h, &self.fullscreen_placement) == 0) return;
+            self.fullscreen_style = w.GetWindowLongPtrW(h, w.GWL_STYLE);
+            const style = self.fullscreen_style & ~@as(isize, w.WS_OVERLAPPEDWINDOW);
+            _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, style);
+            if (w.SetWindowPos(h, null, m.whole.left, m.whole.top, m.whole.right - m.whole.left, m.whole.bottom - m.whole.top, w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0020) == 0) {
+                _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, self.fullscreen_style);
+                return;
+            }
+        } else {
+            _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, self.fullscreen_style);
+            if (place.SetWindowPlacement(h, &self.fullscreen_placement) == 0) return;
+            _ = w.SetWindowPos(h, null, 0, 0, 0, 0, w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0001 | 0x0020);
+        }
         self.full_screen = on;
-        if (self.hwnd) |h| _ = w.ShowWindow(h, if (on) 3 else 9);
         self.onFullscreen();
     }
 

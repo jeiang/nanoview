@@ -89,6 +89,9 @@ pub const Api = struct {
 /// GTK 3's own: its main loop, window placement, events as structs, the
 /// clipboard and dialogs that wait.
 pub const Api3 = struct {
+    gtk_gesture_zoom_new: *const fn (widget: *Widget) callconv(.c) *anyopaque,
+    gdk_event_get_source_device: *const fn (e: *Event) callconv(.c) ?*anyopaque,
+    gdk_device_get_source: *const fn (device: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn (argc: ?*c_int, argv: ?*anyopaque) callconv(.c) c_int,
     gtk_main: *const fn () callconv(.c) void,
     gtk_main_quit: *const fn () callconv(.c) void,
@@ -147,6 +150,11 @@ pub const Api3 = struct {
 /// GTK 4's own: one child per window, event controllers instead of event
 /// signals, a draw function, and a clipboard and dialogs that answer later.
 pub const Api4 = struct {
+    gtk_gesture_zoom_new: *const fn () callconv(.c) *anyopaque,
+    gtk_gesture_single_get_current_button: *const fn (gesture: *anyopaque) callconv(.c) c_uint,
+    gtk_event_controller_get_current_event: *const fn (controller: *anyopaque) callconv(.c) ?*anyopaque,
+    gdk_event_get_device: *const fn (event: *anyopaque) callconv(.c) ?*anyopaque,
+    gdk_device_get_source: *const fn (device: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn () callconv(.c) c_int,
     gtk_window_new: *const fn () callconv(.c) *Widget,
     gtk_window_set_child: *const fn (w: *Widget, child: ?*Widget) callconv(.c) void,
@@ -154,6 +162,9 @@ pub const Api4 = struct {
     gtk_window_minimize: *const fn (w: *Widget) callconv(.c) void,
     gtk_window_get_default_size: *const fn (w: *Widget, width: *c_int, height: *c_int) callconv(.c) void,
     gtk_native_get_surface: *const fn (native: *Widget) callconv(.c) ?*anyopaque,
+    gdk_surface_get_display: *const fn (surface: *anyopaque) callconv(.c) *anyopaque,
+    gdk_display_get_monitor_at_surface: *const fn (display: *anyopaque, surface: *anyopaque) callconv(.c) ?*anyopaque,
+    gdk_monitor_get_geometry: *const fn (monitor: *anyopaque, rect: *Rectangle) callconv(.c) void,
     gdk_surface_get_device_position: *const fn (surface: *anyopaque, device: *anyopaque, x: *f64, y: *f64, mask: ?*c_uint) callconv(.c) c_int,
     gdk_toplevel_begin_move: *const fn (toplevel: *anyopaque, device: *anyopaque, button: c_int, x: f64, y: f64, time: u32) callconv(.c) void,
     gtk_widget_set_visible: *const fn (w: *Widget, on: c_int) callconv(.c) void,

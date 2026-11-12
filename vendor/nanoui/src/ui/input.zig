@@ -207,7 +207,7 @@ pub const KeyState = struct {
 
 /// The pointer button of a press: clicks, presses and double clicks are
 /// the left one's; `right_clicked` and `middle_clicked` the others'.
-pub const Button = enum { left, right, middle };
+pub const Button = enum { left, right, middle, back, forward };
 
 /// Where a scroll gesture is: a trackpad's fingers, then its momentum.
 pub const ScrollPhase = enum { none, began, changed, ended, momentum };

@@ -169,13 +169,21 @@ fn rightMouseUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
     release(obj, event, .right);
 }
 
-/// The middle button is the third (number 2); others are not taken.
+fn otherButton(event: objc.Object) ?input.Button {
+    return switch (objc.msg(objc.NSInteger, event, "buttonNumber", .{})) {
+        2 => .middle,
+        3 => .back,
+        4 => .forward,
+        else => null,
+    };
+}
+
 fn otherMouseDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    if (objc.msg(objc.NSInteger, event, "buttonNumber", .{}) == 2) press(obj, event, .middle);
+    if (otherButton(event)) |button| press(obj, event, button);
 }
 
 fn otherMouseUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    if (objc.msg(objc.NSInteger, event, "buttonNumber", .{}) == 2) release(obj, event, .middle);
+    if (otherButton(event)) |button| release(obj, event, button);
 }
 
 fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {

@@ -251,9 +251,17 @@ pub const Window = struct {
         gtk.api.gtk_widget_set_opacity(win, std.math.clamp(opacity, 0, 1));
     }
 
-    /// The screen's size in points. GTK 4 doesn't say (nor, there, where a
-    /// window is), so it is the window's own size.
+    /// The monitor's size in logical points; before realization, the
+    /// window's own size is the fallback.
     pub fn monitorSize(self: *Window) [2]f64 {
+        if (gtk.v4) if (self.gtkwindow) |win| {
+            const surface = gtk.v4api.gtk_native_get_surface(win) orelse return self.contentSize();
+            const display = gtk.v4api.gdk_surface_get_display(surface);
+            const monitor = gtk.v4api.gdk_display_get_monitor_at_surface(display, surface) orelse return self.contentSize();
+            var rect: gtk.Rectangle = undefined;
+            gtk.v4api.gdk_monitor_get_geometry(monitor, &rect);
+            if (rect.width > 0 and rect.height > 0) return .{ @floatFromInt(rect.width), @floatFromInt(rect.height) };
+        };
         if (!gtk.v4) if (gtk.v3.gdk_screen_get_default()) |s| {
             return .{ @floatFromInt(gtk.v3.gdk_screen_get_width(s)), @floatFromInt(gtk.v3.gdk_screen_get_height(s)) };
         };
