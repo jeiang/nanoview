@@ -24,6 +24,7 @@ test {
     _ = @import("decode.zig");
     _ = @import("webp.zig");
     _ = @import("wuffs.zig");
+    _ = @import("decode_windows.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -210,13 +211,16 @@ test "zooming past the preloaded pixels reads the file" {
     _ = drain(&f.state.preload);
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
     try testing.expect(f.state.source == .pixels);
+    var before_buf: [16]u8 = undefined;
+    const before = f.state.picture_key(&before_buf);
     f.tester.pinch(240, 180, 8, 0, 0);
-    if (@import("builtin").os.tag == .macos) {
-        try testing.expect(f.state.source == .encoded);
-    } else {
-        try testing.expect(f.state.source == .pixels);
-        try testing.expectEqual(f.state.source.pixels.native_w, f.state.source.pixels.width);
+    switch (f.state.source) {
+        .encoded => {},
+        .pixels => |px| try testing.expectEqual(px.native_w, px.width),
+        .none => return error.TestUnexpectedResult,
     }
+    var after_buf: [16]u8 = undefined;
+    try testing.expect(!std.mem.eql(u8, before, f.state.picture_key(&after_buf)));
     try testing.expect(!f.state.viewport.fit);
 }
 

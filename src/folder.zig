@@ -14,14 +14,9 @@ const scan_entries_max: u32 = entries_max * 4;
 /// Lower case, without dots. Initialized before folder scans or the worker start.
 pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
     &.{
-        "png", "jpg",  "jpeg", "jpe", "jfif", "gif", "heic", "heif", "webp", "avif",
-        "tif", "tiff", "bmp",  "ico", "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
-        "pbm",
-    }
-else if (builtin.os.tag == .windows)
-    &.{
-        "png",  "jpg",  "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp",
-        "heic", "heif", "avif", "jxl", "dds", "jxr", "wdp",
+        "png", "jpg",  "jpeg", "jpe",  "jfif", "gif", "heic", "heif", "webp", "avif",
+        "tif", "tiff", "bmp",  "ico",  "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
+        "pbm", "jxl",  "mpo",  "pict", "pct",  "dng", "cr3",  "rw2",  "rwl",  "3fr",
     }
 else
     baseline_extensions;
@@ -31,16 +26,31 @@ const extensions_max: u32 = 64;
 var extension_table: [extensions_max][]const u8 = undefined;
 var extensions_initialized = false;
 
+/// Linux and Windows add the installed system decoders to the baseline;
+/// a failed enumeration leaves the baseline alone.
 pub fn init_extensions() void {
-    if (builtin.os.tag != .linux or extensions_initialized) return;
+    if (extensions_initialized) return;
+    const rest = extension_table[baseline_extensions.len..];
+    const count = switch (builtin.os.tag) {
+        .linux => @import("decode_linux.zig").extensions(rest),
+        .windows => @import("decode_windows.zig").extensions(rest),
+        else => return,
+    };
     @memcpy(extension_table[0..baseline_extensions.len], baseline_extensions);
-    const count = @import("decode_linux.zig").extensions(
-        extension_table[baseline_extensions.len..],
-    );
     extensions = extension_table[0 .. baseline_extensions.len + count];
     extensions_initialized = true;
     assert(extensions.len >= baseline_extensions.len);
     assert(extensions.len <= extensions_max);
+}
+
+/// Whether nanoui's own decoders read this file: the fallback when a system
+/// decoder is missing or rejects the file.
+pub fn is_baseline_name(file_name: []const u8) bool {
+    const ext = extension(file_name);
+    for (baseline_extensions) |known| {
+        if (std.ascii.eqlIgnoreCase(ext, known)) return true;
+    }
+    return false;
 }
 
 pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
@@ -417,4 +427,12 @@ test "a shuffle is a permutation and find still works" {
         const at: u32 = @intCast(i);
         try testing.expectEqual(@as(?u32, at), f.find(f.name(at)));
     }
+}
+
+test "only nanoui's own formats fall back to its decoders" {
+    try testing.expect(is_baseline_name("a.PNG"));
+    try testing.expect(is_baseline_name("b.jpeg"));
+    try testing.expect(is_baseline_name("c.gif"));
+    try testing.expect(!is_baseline_name("d.webp"));
+    try testing.expect(!is_baseline_name("png"));
 }

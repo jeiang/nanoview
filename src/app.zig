@@ -64,6 +64,7 @@ pub const State = struct {
     current_pixels: []u8, // current_pixels_max bytes, allocated once at startup
     source: Source = .none,
     promote_failed: bool = false,
+    promoted: bool = false, // the source was read again at full size
     window: ?*nanoui.Window = null, // null under ui.Tester
     status: Status = .empty,
     path_buf: [paths.path_max]u8 = undefined,
@@ -347,6 +348,7 @@ pub const State = struct {
         s.flip = false;
         s.drag_last = null;
         s.promote_failed = false;
+        s.promoted = false;
         s.slideshow_at = null;
         s.metadata.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
@@ -396,7 +398,8 @@ pub const State = struct {
         if (builtin.os.tag == .macos) return .{ .encoded = bytes };
         const full = std.math.maxInt(u32);
         const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
-            if (err == error.Unavailable) return .{ .encoded = bytes };
+            const portable = folder_mod.is_baseline_name(s.basename());
+            if (err == error.Unavailable or portable) return .{ .encoded = bytes };
             return err;
         };
         return .{ .pixels = .{
@@ -422,6 +425,7 @@ pub const State = struct {
             s.promote_failed = true;
             s.notify("Cannot show full resolution", .{});
         }
+        s.promoted = !s.promote_failed;
         assert(s.source != .none or s.promote_failed);
     }
 
@@ -610,9 +614,13 @@ pub const State = struct {
         s.open_paths(files);
     }
 
-    /// Promoting changes the key, so nanoui reads the new source.
+    /// Promoted pixels get their own prefix, as bytes do: nanoui caches a
+    /// picture by key, so new content needs a new key.
     pub fn picture_key(s: *const State, buf: *[16]u8) []const u8 {
-        const prefix = if (s.source == .pixels) "p" else "e";
+        const prefix = switch (s.source) {
+            .pixels => if (s.promoted) "f" else "p",
+            else => "e",
+        };
         const key = std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, s.generation }) catch unreachable;
         assert(key.len > 1);
         return key;

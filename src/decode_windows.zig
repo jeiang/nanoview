@@ -8,12 +8,9 @@ const decode = @import("decode.zig");
 const orientation = @import("orientation.zig");
 const assert = std.debug.assert;
 
-// WinAPI selects stdcall on x86 and the Windows ABI on x86_64. Windows ARM64
-// uses its ordinary C ABI, rather than Zig's x86-only WinAPI convention.
-const winapi: std.builtin.CallingConvention = if (builtin.cpu.arch == .aarch64)
-    .c
-else
-    .winapi;
+// Zig resolves WinAPI per target: stdcall on x86, the Microsoft ABI on x86_64,
+// and the Windows AAPCS64 variant on arm64.
+const winapi = std.builtin.CallingConvention.winapi;
 
 const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
 const clsid_factory: Guid = .{ .a = 0xCACAF262, .b = 0x9370, .c = 0x4615, .d = .{
@@ -22,6 +19,9 @@ const clsid_factory: Guid = .{ .a = 0xCACAF262, .b = 0x9370, .c = 0x4615, .d = .
 const iid_factory: Guid = .{ .a = 0xEC5EC8A9, .b = 0xC395, .c = 0x4314, .d = .{
     0x9C, 0x77, 0x54, 0xD7, 0xA9, 0x35, 0xFF, 0x70,
 } };
+const iid_codec_info: Guid = .{ .a = 0xE87A44C4, .b = 0xB76E, .c = 0x4C47, .d = .{
+    0x8B, 0x09, 0x29, 0x8E, 0xB1, 0x2A, 0x27, 0x14,
+} };
 const format_pbgra: Guid = .{ .a = 0x6FDDC324, .b = 0x4E03, .c = 0x4BFE, .d = .{
     0xB1, 0x85, 0x3D, 0x77, 0x76, 0x8D, 0xC9, 0x10,
 } };
@@ -29,6 +29,12 @@ const changed_mode: i32 = @bitCast(@as(u32, 0x80010106));
 const bytes_per_pixel: u32 = 4;
 const flip_horizontal: u32 = 8;
 const interpolation_fant: u32 = 3;
+const cache_on_load: u32 = 2; // WICBitmapCacheOnLoad
+const component_decoder: u32 = 1;
+const decoders_max: u32 = 64;
+const extension_text_max: u32 = 512;
+pub const extension_names_max: u32 = 32;
+pub const extension_len_max: u32 = 16;
 
 // Layout and vtable slots follow wincodec.h; all interfaces begin with IUnknown.
 const Com = extern struct {
@@ -76,11 +82,8 @@ pub fn decode_fit(
 ) !decode.Size {
     comptime assert(builtin.os.tag == .windows);
     if (encoded.len == 0 or encoded.len > decode.file_size_max) return error.InvalidImage;
-    // A UI thread may already be STA. Its existing apartment is usable, but
-    // RPC_E_CHANGED_MODE must not be balanced with CoUninitialize.
-    const initialized = win.CoInitializeEx(null, 0);
-    if (initialized < 0 and initialized != changed_mode) return error.ComInitializationFailed;
-    defer if (initialized >= 0) win.CoUninitialize();
+    const uninitialize = try com_initialize();
+    defer if (uninitialize) win.CoUninitialize();
     var raw: ?*Com = null;
     try check(win.CoCreateInstance(&clsid_factory, null, 1, &iid_factory, &raw));
     const factory = raw orelse return error.WicDecodeFailed;
@@ -147,25 +150,49 @@ fn decode_frame(
         else => 0,
     };
     const mirrored = exif == 2 or exif == 4 or exif == 5 or exif == 7;
-    // Separate rotation and reflection stages make the composition explicit:
-    // rotate clockwise first, then reflect horizontally in upright coordinates.
-    const rotated = if (turns != 0) try transform(factory, frame, turns) else null;
-    defer if (rotated) |source| source.release();
-    const flipped = if (mirrored)
-        try transform(factory, rotated orelse frame, flip_horizontal)
-    else
-        null;
-    defer if (flipped) |source| source.release();
-    const source = flipped orelse rotated orelse frame;
+    // Scale at the frame's stored orientation first: the flip-rotator reads
+    // pixel by pixel, which is quadratic over a scanline codec, so it only
+    // runs on a buffered bitmap of the fitted size.
     const scaler = try create(factory, 11);
     defer scaler.release();
     const scale = scaler.slot(
         *const fn (*Com, *Com, u32, u32, u32) callconv(winapi) i32,
         8,
     );
-    try check(scale(scaler, source, size.width, size.height, interpolation_fant));
-    try copy_pixels(factory, scaler, out[0..@intCast(byte_count)], size.width);
+    const stored_w = if (swapped) size.height else size.width;
+    const stored_h = if (swapped) size.width else size.height;
+    try check(scale(scaler, frame, stored_w, stored_h, interpolation_fant));
+    if (turns == 0 and !mirrored) {
+        try copy_pixels(factory, scaler, out[0..@intCast(byte_count)], size.width);
+        return size;
+    }
+    const buffered = try buffer(factory, scaler);
+    defer buffered.release();
+    // Rotate clockwise first, then reflect horizontally in upright coordinates.
+    const rotated = if (turns != 0) try transform(factory, buffered, turns) else null;
+    defer if (rotated) |source| source.release();
+    const flipped = if (mirrored)
+        try transform(factory, rotated orelse buffered, flip_horizontal)
+    else
+        null;
+    defer if (flipped) |source| source.release();
+    const source = flipped orelse rotated orelse buffered;
+    try copy_pixels(factory, source, out[0..@intCast(byte_count)], size.width);
     return size;
+}
+
+/// IWICImagingFactory::CreateBitmapFromSource (slot 18) with
+/// WICBitmapCacheOnLoad: the scaled pixels are decoded once, into WIC memory.
+fn buffer(factory: *Com, source: *Com) !*Com {
+    var raw: ?*Com = null;
+    const create_bitmap = factory.slot(
+        *const fn (*Com, *Com, u32, *?*Com) callconv(winapi) i32,
+        18,
+    );
+    try check(create_bitmap(factory, source, cache_on_load, &raw));
+    const bitmap = raw orelse return error.WicDecodeFailed;
+    assert(@intFromPtr(bitmap) != 0);
+    return bitmap;
 }
 
 fn copy_pixels(factory: *Com, source: *Com, out: []u8, width: u32) !void {
@@ -235,4 +262,134 @@ fn create(factory: *Com, comptime index: usize) !*Com {
 
 fn check(result: i32) !void {
     if (result < 0) return error.WicDecodeFailed;
+}
+
+/// A UI thread may already be STA. Its existing apartment is usable, but
+/// RPC_E_CHANGED_MODE must not be balanced with CoUninitialize.
+fn com_initialize() !bool {
+    const initialized = win.CoInitializeEx(null, 0);
+    if (initialized < 0 and initialized != changed_mode) return error.ComInitializationFailed;
+    assert(initialized >= 0 or initialized == changed_mode);
+    return initialized >= 0;
+}
+
+/// Known raster names that installed WIC decoders claim; zero when COM or
+/// WIC enumeration fails, so the caller keeps only its baseline.
+pub fn extensions(out: [][]const u8) usize {
+    comptime assert(builtin.os.tag == .windows);
+    const uninitialize = com_initialize() catch return 0;
+    defer if (uninitialize) win.CoUninitialize();
+    var raw: ?*Com = null;
+    if (win.CoCreateInstance(&clsid_factory, null, 1, &iid_factory, &raw) < 0) return 0;
+    const factory = raw orelse return 0;
+    defer factory.release();
+    raw = null;
+    const enumerate = factory.slot(*const fn (*Com, u32, u32, *?*Com) callconv(winapi) i32, 23);
+    if (enumerate(factory, component_decoder, 0, &raw) < 0) return 0;
+    const components = raw orelse return 0;
+    defer components.release();
+    var supported: [decode.known_extensions.len]bool = @splat(false);
+    const next = components.slot(*const fn (*Com, u32, *?*Com, *u32) callconv(winapi) i32, 3);
+    for (0..decoders_max) |_| {
+        var fetched: u32 = 0;
+        raw = null;
+        // S_FALSE (1) ends the enumeration.
+        if (next(components, 1, &raw, &fetched) != 0 or fetched != 1) break;
+        const component = raw orelse break;
+        defer component.release();
+        mark_decoder(component, &supported);
+    }
+    var count: usize = 0;
+    for (decode.known_extensions, supported) |known, available| {
+        if (!available) continue;
+        if (count == out.len) break;
+        out[count] = known;
+        count += 1;
+    }
+    assert(count <= out.len);
+    assert(count <= decode.known_extensions.len);
+    return count;
+}
+
+fn mark_decoder(component: *Com, supported: *[decode.known_extensions.len]bool) void {
+    var raw: ?*Com = null;
+    const query = component.slot(*const fn (*Com, *const Guid, *?*Com) callconv(winapi) i32, 0);
+    if (query(component, &iid_codec_info, &raw) < 0) return;
+    const info = raw orelse return;
+    defer info.release();
+    var text: [extension_text_max]u16 = undefined;
+    var actual: u32 = 0;
+    const get = info.slot(*const fn (*Com, u32, [*]u16, *u32) callconv(winapi) i32, 17);
+    // A list longer than the buffer fails; that decoder adds nothing.
+    if (get(info, extension_text_max, &text, &actual) < 0) return;
+    var storage: [extension_names_max][extension_len_max]u8 = undefined;
+    var names: [extension_names_max][]const u8 = undefined;
+    const n = parse_extensions(text[0..@min(actual, extension_text_max)], &storage, &names);
+    var matched: [decode.known_extensions.len][]const u8 = undefined;
+    const count = decode.intersect(names[0..n], &matched);
+    assert(count <= n);
+    for (decode.known_extensions, supported) |known, *available| {
+        for (matched[0..count]) |match| {
+            if (std.mem.eql(u8, known, match)) available.* = true;
+        }
+    }
+}
+
+/// Splits a WIC list such as ".jpg,.JPEG,.jfif" into lower-case names without
+/// dots. Empty, non-alphanumeric, non-ASCII and over-long names are skipped.
+pub fn parse_extensions(
+    text: []const u16,
+    storage: *[extension_names_max][extension_len_max]u8,
+    names: *[extension_names_max][]const u8,
+) usize {
+    assert(text.len <= extension_text_max);
+    var count: usize = 0;
+    var len: usize = 0;
+    var valid = true;
+    for (0..text.len + 1) |i| {
+        if (count == extension_names_max) break;
+        const last = i == text.len or text[i] == 0;
+        if (!last and text[i] != ',') {
+            const unit = text[i];
+            if (unit == '.' and len == 0) continue;
+            if (unit >= 0x80 or !std.ascii.isAlphanumeric(@intCast(unit)) or
+                len == extension_len_max)
+            {
+                valid = false;
+                continue;
+            }
+            storage[count][len] = std.ascii.toLower(@intCast(unit));
+            len += 1;
+            continue;
+        }
+        if (valid and len > 0) {
+            names[count] = storage[count][0..len];
+            count += 1;
+        }
+        len = 0;
+        valid = true;
+        if (last) break;
+    }
+    assert(count <= extension_names_max);
+    return count;
+}
+
+test "parse_extensions lowercases WIC lists and skips invalid names" {
+    const t = std.testing;
+    var storage: [extension_names_max][extension_len_max]u8 = undefined;
+    var names: [extension_names_max][]const u8 = undefined;
+    const list = ".jpg,.JPEG,,jfif,.t\u{e9}f,.waytoolongextension,.x-y,.png\x00.bmp";
+    const text = std.unicode.utf8ToUtf16LeStringLiteral(list);
+    const n = parse_extensions(text, &storage, &names);
+    try t.expectEqual(@as(usize, 4), n);
+    try t.expectEqualStrings("jpg", names[0]);
+    try t.expectEqualStrings("jpeg", names[1]);
+    try t.expectEqualStrings("jfif", names[2]);
+    try t.expectEqualStrings("png", names[3]);
+    try t.expectEqual(@as(usize, 0), parse_extensions(&.{}, &storage, &names));
+    var many: [extension_names_max * 3 + 3]u16 = undefined;
+    for (0..extension_names_max + 1) |i| {
+        many[i * 3 ..][0..3].* = .{ '.', 'a', ',' };
+    }
+    try t.expectEqual(@as(usize, extension_names_max), parse_extensions(&many, &storage, &names));
 }
