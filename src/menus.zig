@@ -1,13 +1,21 @@
 //! What menus show of each action: whether it applies now and whether it
-//! is checked. Titles and groups are `actions.infos`.
+//! is checked, and the context menu. Titles and groups are `actions.infos`.
 const std = @import("std");
 const builtin = @import("builtin");
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+const kit = nanoui.kit;
 const assert = std.debug.assert;
 const actions = @import("actions.zig");
 const app = @import("app.zig");
+const keymap = @import("keymap.zig");
+const paths = @import("paths.zig");
+const recent_mod = @import("recent.zig");
+const view = @import("view.zig");
 
 const Action = actions.Action;
 const State = app.State;
+const mac = builtin.os.tag == .macos;
 
 /// The state a checkable action turns on or off; null for the others.
 pub fn checked(s: *const State, action: Action) ?bool {
@@ -50,4 +58,165 @@ pub fn available(s: *const State, action: Action) bool {
 fn full_screen(s: *const State) bool {
     const w = s.window orelse return false;
     return w.isFullScreen();
+}
+
+/// The context menu: where it opens, and whether it is open.
+pub const ContextMenu = struct {
+    open: bool = false,
+    at: ui.Point = .{ .x = 0, .y = 0 },
+};
+
+const action_count: u32 = std.enums.values(Action).len;
+/// Every action with a separator before it, recent files, and the rest.
+const list_len_max: u32 = action_count * 2 + recent_mod.recent_max + 8;
+const context_width: f32 = 250;
+const context_row_height: f32 = 24;
+
+/// The submenus of the context menu: the File and Edit groups stand in the
+/// menu itself.
+const Sub = enum(u8) { recent, view, go };
+const sub_count = std.enums.values(Sub).len;
+
+const Entry = union(enum) { none, action: Action, recent: u32, clear_recent, submenu: Sub };
+
+/// Menu items and what each one does.
+const List = struct {
+    items: [list_len_max]kit.MenuItem = undefined,
+    entries: [list_len_max]Entry = undefined,
+    len: u32 = 0,
+
+    fn add(l: *List, item: kit.MenuItem, entry: Entry) void {
+        assert(l.len < list_len_max);
+        assert(item.separator == (entry == .none));
+        l.items[l.len] = item;
+        l.entries[l.len] = entry;
+        l.len += 1;
+    }
+
+    /// A separator, unless the list is empty or ends with one.
+    fn separate(l: *List) void {
+        assert(l.len <= list_len_max);
+        if (l.len > 0 and !l.items[l.len - 1].separator) l.add(.{ .separator = true }, .none);
+    }
+
+    /// The items, without a separator at the end.
+    fn slice(l: *List) []const kit.MenuItem {
+        assert(l.len <= list_len_max);
+        if (l.len > 0 and l.items[l.len - 1].separator) l.len -= 1;
+        return l.items[0..l.len];
+    }
+};
+
+/// Opens the context menu on a right click (or Control-click on macOS), or
+/// Shift+F10 off macOS. nanoui reports no Menu key. Call before the keys.
+pub fn context_request(s: *State, c: *ui.Context) void {
+    assert(c.size.w >= 0 and c.size.h >= 0);
+    if (s.rename_open) return;
+    const in = &c.input;
+    const click = in.secondary or (in.pressed and in.button == .right);
+    var keyboard = false;
+    if (!mac and !click) {
+        keyboard = c.shortcut(.{ .key = ui.Shortcut.f(10), .shift = true }) or
+            (in.key == .f10 and in.shift);
+    }
+    if (!click and !keyboard) return;
+    // The press opened the menu: it does not also close it.
+    in.pressed = false;
+    if (keyboard) in.key = null;
+    const inside = in.mouse.x >= 0 and in.mouse.y >= 0 and
+        in.mouse.x < c.size.w and in.mouse.y < c.size.h;
+    const center: ui.Point = .{ .x = c.size.w / 2, .y = c.size.h / 2 };
+    s.context_menu.at = if (click or inside) in.mouse else center;
+    s.context_menu.open = true;
+    assert(s.context_menu.open);
+}
+
+/// The context menu, open or fading: the actions that apply now.
+pub fn context_menu(s: *State, c: *ui.Context) void {
+    var top: List = .{};
+    var subs: [sub_count]List = @splat(.{});
+    fill(s, c, &top, &subs);
+    const m = &s.context_menu;
+    const anchor: ui.Rect = .{ .x = m.at.x, .y = m.at.y, .w = 0, .h = 0 };
+    const options: kit.MenuOptions = .{ .width = context_width, .row_height = context_row_height };
+    const items = top.slice();
+    assert(items.len > 0);
+    const choice = kit.menuChoice(c, "context-menu", &m.open, anchor, items, options) orelse return;
+    const entry = top.entries[choice.index];
+    const chosen = if (choice.sub) |j| subs[@backingInt(entry.submenu)].entries[j] else entry;
+    switch (chosen) {
+        .action => |a| view.perform(s, c, a),
+        .recent => |i| open_recent(s, i),
+        .clear_recent => s.clear_recent(),
+        .none, .submenu => unreachable,
+    }
+}
+
+fn fill(s: *const State, c: *ui.Context, top: *List, subs: *[sub_count]List) void {
+    assert(top.len == 0);
+    const recent = &subs[@backingInt(Sub.recent)];
+    const count = s.recent_count();
+    for (0..count) |i| {
+        const path = s.recent(@intCast(i)) orelse break;
+        recent.add(.{ .label = std.fs.path.basename(path) }, .{ .recent = @intCast(i) });
+    }
+    recent.separate();
+    if (count > 0) recent.add(.{ .label = "Clear Recent" }, .clear_recent);
+    add_group(s, c, &subs[@backingInt(Sub.view)], .view, null);
+    add_group(s, c, &subs[@backingInt(Sub.go)], .go, null);
+    add_group(s, c, top, .file, subs);
+    top.separate();
+    add_group(s, c, top, .edit, null);
+    top.separate();
+    add_submenu(top, subs, .view, actions.Group.view.title());
+    add_submenu(top, subs, .go, actions.Group.go.title());
+    assert(top.len <= list_len_max);
+}
+
+/// The group's actions that apply now; Open Recent after Open when `subs`.
+fn add_group(
+    s: *const State,
+    c: *ui.Context,
+    l: *List,
+    group: actions.Group,
+    subs: ?*[sub_count]List,
+) void {
+    assert(l.len < list_len_max);
+    for (std.enums.values(Action)) |a| {
+        const info = actions.infos.get(a);
+        if (info.group != group or !available(s, a)) continue;
+        if (info.section) l.separate();
+        const item: kit.MenuItem = .{
+            .label = info.title,
+            .shortcut = shortcut(s, c, a),
+            .checked = checked(s, a),
+        };
+        l.add(item, .{ .action = a });
+        if (a == .open) if (subs) |all| add_submenu(l, all, .recent, "Open Recent");
+    }
+}
+
+fn add_submenu(top: *List, subs: *[sub_count]List, sub: Sub, label: []const u8) void {
+    assert(label.len > 0);
+    const items = subs[@backingInt(sub)].slice();
+    if (items.len == 0) return;
+    top.add(.{ .label = label, .items = items }, .{ .submenu = sub });
+}
+
+/// The text of the action's first key, for this frame.
+fn shortcut(s: *const State, c: *ui.Context, action: Action) []const u8 {
+    const sc = s.keymap.first_key(action) orelse return "";
+    var buf: [keymap.shortcut_text_len_max]u8 = undefined;
+    const text = keymap.shortcut_text(sc, &buf);
+    assert(text.len > 0);
+    return c.print("{s}", .{text});
+}
+
+fn open_recent(s: *State, i: u32) void {
+    // Opening moves the entry to the front of the list: copy it first.
+    var buf: [paths.path_max]u8 = undefined;
+    const path = s.recent(i) orelse return s.notify("That recent file is gone", .{});
+    assert(path.len <= paths.path_max);
+    @memcpy(buf[0..path.len], path);
+    s.open_path(buf[0..path.len]);
 }

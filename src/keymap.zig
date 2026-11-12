@@ -104,7 +104,68 @@ pub const Keymap = struct {
         assert(i == k.count);
         return first;
     }
+
+    /// The key menus show for an action: its first binding.
+    pub fn first_key(k: *const Keymap, action: Action) ?ui.Shortcut {
+        assert(k.count <= bindings_max);
+        for (k.slice()) |b| if (b.action == action) return b.shortcut;
+        return null;
+    }
 };
+
+const mac = @import("builtin").os.tag == .macos;
+pub const shortcut_text_len_max: u32 = 32;
+
+/// How menus show a key: `⇧⌘C` on macOS, `Ctrl+Shift+C` elsewhere.
+pub fn shortcut_text(sc: ui.Shortcut, buf: *[shortcut_text_len_max]u8) []const u8 {
+    assert(sc.key != 0);
+    var w: std.Io.Writer = .fixed(buf);
+    const n = sc.native();
+    const mods = if (mac)
+        [_]struct { bool, []const u8 }{
+            .{ n.ctrl, "⌃" },
+            .{ n.alt, "⌥" },
+            .{ n.shift, "⇧" },
+            .{ n.cmd, "⌘" },
+        }
+    else
+        [_]struct { bool, []const u8 }{
+            .{ n.ctrl, "Ctrl+" }, .{ n.alt, "Alt+" }, .{ n.shift, "Shift+" }, .{ n.cmd, "" },
+        };
+    for (mods) |m| if (m[0]) w.writeAll(m[1]) catch unreachable;
+    if (key_symbol(n.key)) |name| {
+        w.writeAll(name) catch unreachable;
+    } else if (n.key >= S.f(1) and n.key <= S.f(function_key_max)) {
+        w.print("F{d}", .{n.key - S.f(1) + 1}) catch unreachable;
+    } else if (n.key < 128) {
+        w.writeByte(std.ascii.toUpper(@intCast(n.key))) catch unreachable;
+    } else {
+        w.print("{u}", .{n.key}) catch unreachable;
+    }
+    assert(w.end > 0);
+    return w.buffered();
+}
+
+fn key_symbol(key: u21) ?[]const u8 {
+    const symbols = [_]struct { u21, []const u8, []const u8 }{
+        .{ S.left, "←", "Left" },
+        .{ S.right, "→", "Right" },
+        .{ S.up, "↑", "Up" },
+        .{ S.down, "↓", "Down" },
+        .{ S.escape, "⎋", "Esc" },
+        .{ S.enter, "↩", "Enter" },
+        .{ S.tab, "⇥", "Tab" },
+        .{ S.backspace, "⌫", "Backspace" },
+        .{ S.forward_delete, "⌦", "Del" },
+        .{ S.home, "↖", "Home" },
+        .{ S.end, "↘", "End" },
+        .{ S.page_up, "⇞", "PgUp" },
+        .{ S.page_down, "⇟", "PgDn" },
+        .{ ' ', "Space", "Space" },
+    };
+    for (symbols) |sym| if (sym[0] == key) return if (mac) sym[1] else sym[2];
+    return null;
+}
 
 const same = actions.same;
 
@@ -256,4 +317,18 @@ test "the map holds at most bindings_max keys" {
     }
     try testing.expect(refused);
     try testing.expect(k.count <= bindings_max);
+}
+
+test "menus show keys the platform's way" {
+    var buf: [shortcut_text_len_max]u8 = undefined;
+    const copy_path = shortcut_text(.{ .key = 'c', .cmd = true, .shift = true }, &buf);
+    try testing.expectEqualStrings(if (mac) "⇧⌘C" else "Ctrl+Shift+C", copy_path);
+    try testing.expectEqualStrings("F2", shortcut_text(.{ .key = S.f(2) }, &buf));
+    const right = shortcut_text(.{ .key = S.right }, &buf);
+    try testing.expectEqualStrings(if (mac) "→" else "Right", right);
+    try testing.expectEqualStrings("+", shortcut_text(.{ .key = '+' }, &buf));
+    var k: Keymap = .defaults();
+    try testing.expectEqual(@as(?u21, S.right), (k.first_key(.next) orelse unreachable).key);
+    try testing.expectEqual(@as(?Error, null), k.rebind("next", "n", 1));
+    try testing.expectEqual(@as(?u21, 'n'), (k.first_key(.next) orelse unreachable).key);
 }
