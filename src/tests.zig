@@ -19,6 +19,7 @@ test {
     _ = @import("shell.zig");
     _ = @import("actions.zig");
     _ = @import("settings.zig");
+    _ = @import("keymap.zig");
     _ = @import("decode.zig");
 }
 
@@ -488,6 +489,41 @@ test "zoom keys use the configured percentage and options notify" {
         _ = f.tester.shortcut(.{ .key = key });
         try testing.expect(f.tester.containsText(message));
     }
+}
+
+test "a rebound key runs its action and its old key no longer does" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 4, 4);
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "settings.conf",
+        .data = "key.next = n, PageDown\nkey.previous = shift+N\n",
+    });
+    f.state.load_settings(f.dir_buf[0..f.dir_len]);
+    try testing.expectEqual(@as(u32, 0), f.state.message_len);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = 'n' });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    _ = f.tester.shortcut(.{ .key = ' ' });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = 'n', .shift = true });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.page_down });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+}
+
+test "a key bound twice in settings.conf is named in the window" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "settings.conf",
+        .data = "# keys\nkey.info = x\n",
+    });
+    f.state.load_settings(f.dir_buf[0..f.dir_len]);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("settings.conf line 2: key bound to two actions"));
 }
 
 test "each title mode gives its text" {

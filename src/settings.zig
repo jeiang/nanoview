@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const paths = @import("paths.zig");
+const keymap = @import("keymap.zig");
 const sort_order = @import("sort_order.zig");
 const assert = std.debug.assert;
 
@@ -86,6 +87,10 @@ pub const Reason = enum {
     missing_equals,
     line_too_long,
     file_too_long,
+    unknown_action,
+    bad_key_name,
+    too_many_keys,
+    key_bound_twice,
     window_min_above_max,
 
     pub fn text(reason: Reason) []const u8 {
@@ -95,6 +100,10 @@ pub const Reason = enum {
             .missing_equals => "expected key = value",
             .line_too_long => "line too long",
             .file_too_long => "file too long",
+            .unknown_action => "unknown action",
+            .bad_key_name => "bad key name",
+            .too_many_keys => "too many keys",
+            .key_bound_twice => "key bound to two actions",
             .window_min_above_max => "window_min_percent above window_max_percent",
         };
     }
@@ -104,14 +113,15 @@ pub const Reason = enum {
 pub const Problem = struct { line: u32, reason: Reason };
 
 /// Invalid lines leave their field unchanged; later valid lines still apply.
-pub fn parse(bytes: []const u8, settings: *Settings) ?Problem {
+/// `keys` starts as the defaults and takes the `key.<action>` lines.
+pub fn parse(bytes: []const u8, settings: *Settings, keys: *keymap.Keymap) ?Problem {
     if (bytes.len > file_size_max) return .{ .line = 1, .reason = .file_too_long };
     var first: ?Problem = null;
     var start: usize = 0;
     var line: u32 = 1;
     for (0..bytes.len + 1) |end| {
         if (end != bytes.len and bytes[end] != '\n') continue;
-        const reason = parse_line(bytes[start..end], settings);
+        const reason = parse_line(bytes[start..end], line, settings, keys);
         if (first == null) {
             if (reason) |r| first = .{ .line = line, .reason = r };
         }
@@ -120,7 +130,11 @@ pub fn parse(bytes: []const u8, settings: *Settings) ?Problem {
     }
     assert(line <= file_size_max + 2);
     const window = check_window(settings);
+    const conflict = keys.drop_conflicts();
     if (first == null) first = window;
+    if (first == null) {
+        if (conflict) |l| first = .{ .line = l, .reason = .key_bound_twice };
+    }
     return first;
 }
 
@@ -134,7 +148,7 @@ fn check_window(settings: *Settings) ?Problem {
     return .{ .line = 0, .reason = .window_min_above_max };
 }
 
-fn parse_line(raw: []const u8, settings: *Settings) ?Reason {
+fn parse_line(raw: []const u8, number: u32, settings: *Settings, keys: *keymap.Keymap) ?Reason {
     assert(raw.len <= file_size_max);
     if (raw.len > line_len_max) return .line_too_long;
     const line = std.mem.trim(u8, raw[0..comment_start(raw)], " \t\r");
@@ -142,6 +156,14 @@ fn parse_line(raw: []const u8, settings: *Settings) ?Reason {
     const equals = std.mem.indexOfScalar(u8, line, '=') orelse return .missing_equals;
     const key = std.mem.trim(u8, line[0..equals], " \t");
     const value = std.mem.trim(u8, line[equals + 1 ..], " \t");
+    if (std.mem.startsWith(u8, key, "key.")) {
+        const err = keys.rebind(key["key.".len..], value, number) orelse return null;
+        return switch (err) {
+            .unknown_action => .unknown_action,
+            .bad_key => .bad_key_name,
+            .too_many_keys => .too_many_keys,
+        };
+    }
     inline for (@typeInfo(Settings).@"struct".field_names) |name| {
         if (std.mem.eql(u8, key, name)) {
             @field(settings, name) = parse_value(name, value) orelse return .bad_value;
@@ -204,7 +226,12 @@ pub fn config_directory(gpa: std.mem.Allocator, env: *const std.process.Environ.
 }
 
 /// The directory argument permits a real file read without touching the user's home.
-pub fn load(io: std.Io, directory: []const u8, settings: *Settings) !?Problem {
+pub fn load(
+    io: std.Io,
+    directory: []const u8,
+    settings: *Settings,
+    keys: *keymap.Keymap,
+) !?Problem {
     assert(directory.len > 0);
     var path_buf: [paths.path_max]u8 = undefined;
     const path = paths.join(directory, "settings.conf", &path_buf) orelse
@@ -215,14 +242,19 @@ pub fn load(io: std.Io, directory: []const u8, settings: *Settings) !?Problem {
         error.FileTooBig => return .{ .line = 1, .reason = .file_too_long },
         else => return err,
     };
-    return parse(content, settings);
+    return parse(content, settings, keys);
 }
 
 const testing = std.testing;
 
+fn parse_plain(bytes: []const u8, settings: *Settings) ?Problem {
+    var keys: keymap.Keymap = .defaults();
+    return parse(bytes, settings, &keys);
+}
+
 test "all settings parse with whitespace comments and blank lines" {
     var settings: Settings = .{};
-    try testing.expect(parse(
+    try testing.expect(parse_plain(
         \\ # preferences
         \\
         \\ fit_mode = fill # cropped
@@ -270,7 +302,7 @@ test "all settings parse with whitespace comments and blank lines" {
         .always_on_top = true,
     }, settings);
     const tail = "\tzoom_step_percent = 1\r\nslideshow_seconds=1\nbackground=theme";
-    try testing.expect(parse(tail, &settings) == null);
+    try testing.expect(parse_plain(tail, &settings) == null);
     try testing.expect(settings.background == .theme);
     try testing.expectEqual(@as(u32, 1), settings.zoom_step_percent);
     try testing.expectEqual(@as(u32, 1), settings.slideshow_seconds);
@@ -297,10 +329,13 @@ test "bad settings retain defaults and parsing continues with the first problem"
         .{ "window_min_percent = 101", Reason.bad_value },
         .{ "sort = date_added", Reason.bad_value },
         .{ "title = path", Reason.bad_value },
+        .{ "key.fly = a", Reason.unknown_action },
+        .{ "key.next = hyper+n", Reason.bad_key_name },
+        .{ "key.next = a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q", Reason.too_many_keys },
     };
     inline for (cases) |case| {
         var settings: Settings = .{};
-        const problem = parse("# comment\n\n" ++ case[0] ++
+        const problem = parse_plain("# comment\n\n" ++ case[0] ++
             "\ncheckerboard=true\nalso_bad=1", &settings).?;
         try testing.expectEqual(@as(u32, 3), problem.line);
         try testing.expectEqual(case[1], problem.reason);
@@ -313,11 +348,11 @@ test "bad settings retain defaults and parsing continues with the first problem"
 test "file and line limits are enforced" {
     var settings: Settings = .{};
     const huge: [file_size_max + 1]u8 = @splat(' ');
-    try testing.expectEqual(Reason.file_too_long, parse(&huge, &settings).?.reason);
+    try testing.expectEqual(Reason.file_too_long, parse_plain(&huge, &settings).?.reason);
     const long: [line_len_max + 1]u8 = @splat('x');
-    try testing.expectEqual(Reason.line_too_long, parse(&long, &settings).?.reason);
+    try testing.expectEqual(Reason.line_too_long, parse_plain(&long, &settings).?.reason);
     const boundary: [line_len_max]u8 = @splat(' ');
-    try testing.expect(parse(&boundary, &settings) == null);
+    try testing.expect(parse_plain(&boundary, &settings) == null);
     try testing.expectEqualDeep(Settings{}, settings);
 }
 
@@ -336,17 +371,32 @@ test "background colors parse in either case" {
 test "window bounds that cross fall back to the defaults" {
     var settings: Settings = .{};
     const equal = "window_min_percent = 80\nwindow_max_percent = 80";
-    try testing.expect(parse(equal, &settings) == null);
+    try testing.expect(parse_plain(equal, &settings) == null);
     try testing.expectEqual(@as(u32, 80), settings.window_min_percent);
     settings = .{};
-    const problem = parse("window_min_percent=50\nwindow_max_percent=40", &settings).?;
+    const problem = parse_plain("window_min_percent=50\nwindow_max_percent=40", &settings).?;
     try testing.expectEqual(Problem{ .line = 0, .reason = .window_min_above_max }, problem);
     try testing.expectEqual(@as(u32, 0), settings.window_min_percent);
     try testing.expectEqual(@as(u32, 80), settings.window_max_percent);
     settings = .{};
-    const first = parse("smooth=maybe\nwindow_min_percent=90", &settings).?;
+    const first = parse_plain("smooth=maybe\nwindow_min_percent=90", &settings).?;
     try testing.expectEqual(@as(u32, 1), first.line);
     try testing.expectEqual(@as(u32, 0), settings.window_min_percent);
+}
+
+test "key lines rebind, unbind and report a key bound twice" {
+    var settings: Settings = .{};
+    var keys: keymap.Keymap = .defaults();
+    const text = "key.open =\nkey.next = n, shift+N # comment\nkey.zoom_in = x\n";
+    const problem = parse(text, &settings, &keys).?;
+    try testing.expectEqual(Problem{ .line = 3, .reason = .key_bound_twice }, problem);
+    var next_keys: u32 = 0;
+    for (keys.slice()) |b| {
+        try testing.expect(b.action != .open and b.action != .random);
+        if (b.action == .next) next_keys += 1;
+    }
+    try testing.expectEqual(@as(u32, 2), next_keys);
+    try testing.expectEqualDeep(Settings{}, settings);
 }
 
 test "loading a real settings file from an injected directory" {
@@ -355,16 +405,17 @@ test "loading a real settings file from an injected directory" {
     var directory: [paths.path_max]u8 = undefined;
     const len = try tmp.dir.realPathFile(testing.io, ".", &directory);
     var settings: Settings = .{};
-    try testing.expect(try load(testing.io, directory[0..len], &settings) == null);
+    var keys: keymap.Keymap = .defaults();
+    try testing.expect(try load(testing.io, directory[0..len], &settings, &keys) == null);
     try tmp.dir.writeFile(testing.io, .{
         .sub_path = "settings.conf",
         .data = "zoom_step_percent=80\nfit_mode=height\n",
     });
-    try testing.expect(try load(testing.io, directory[0..len], &settings) == null);
+    try testing.expect(try load(testing.io, directory[0..len], &settings, &keys) == null);
     try testing.expectEqual(@as(u32, 80), settings.zoom_step_percent);
     try testing.expectEqual(FitMode.height, settings.fit_mode);
     const huge: [file_size_max + 1]u8 = @splat(' ');
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "settings.conf", .data = &huge });
-    const problem = (try load(testing.io, directory[0..len], &settings)).?;
+    const problem = (try load(testing.io, directory[0..len], &settings, &keys)).?;
     try testing.expectEqual(Reason.file_too_long, problem.reason);
 }

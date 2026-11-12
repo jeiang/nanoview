@@ -8,6 +8,7 @@ const orientation = @import("orientation.zig");
 const viewport = @import("viewport.zig");
 const preload = @import("preload.zig");
 const actions = @import("actions.zig");
+const keymap = @import("keymap.zig");
 const settings_mod = @import("settings.zig");
 const State = app.State;
 const assert = std.debug.assert;
@@ -348,18 +349,22 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     if (c.shortcut(sc)) return true;
     if (mac or sc.cmd or sc.ctrl or sc.alt) return false;
     if (c.input.cmd or c.input.ctrl or c.input.alt or c.input.shift != sc.shift) return false;
-    // `?Key`: nanoui does not export its key enum from `ui`.
-    const Key = @FieldType(@FieldType(ui.Context, "input"), "key");
-    const want: Key = switch (sc.key) {
-        ui.Shortcut.left => .left,
-        ui.Shortcut.right => .right,
-        ui.Shortcut.home => .home,
-        ui.Shortcut.end => .end,
-        ui.Shortcut.enter => .enter,
-        ui.Shortcut.f(5) => .f5,
-        ui.Shortcut.escape => .escape,
-        ui.Shortcut.forward_delete => .delete,
-        else => null,
+    const S = ui.Shortcut;
+    const want: ?NamedKey = switch (sc.key) {
+        S.left => .left,
+        S.right => .right,
+        S.up => .up,
+        S.down => .down,
+        S.home => .home,
+        S.end => .end,
+        S.page_up => .page_up,
+        S.page_down => .page_down,
+        S.enter => .enter,
+        S.tab => .tab,
+        S.escape => .escape,
+        S.backspace => .backspace,
+        S.forward_delete => .delete,
+        else => function_key(sc.key),
     };
     if (want) |k| {
         if (c.input.key != k) return false;
@@ -372,10 +377,21 @@ fn key_hit(c: *ui.Context, sc: ui.Shortcut) bool {
     return true;
 }
 
+// nanoui does not export its key enum from `ui`.
+const NamedKey = @typeInfo(@FieldType(@FieldType(ui.Context, "input"), "key")).optional.child;
+
+fn function_key(key: u21) ?NamedKey {
+    const first = ui.Shortcut.f(1);
+    if (key < first or key > ui.Shortcut.f(keymap.function_key_max)) return null;
+    const result: NamedKey = @fromBackingInt(@intCast(@backingInt(NamedKey.f1) + (key - first)));
+    assert(result != .f1 or key == first);
+    return result;
+}
+
 /// One key event runs at most one action.
 fn keys(s: *State, c: *ui.Context) void {
     assert(s.path_len <= paths.path_max);
-    for (actions.bindings) |b| {
+    for (s.keymap.slice()) |b| {
         if (!key_hit(c, b.shortcut)) continue;
         perform(s, c, b.action);
         return;

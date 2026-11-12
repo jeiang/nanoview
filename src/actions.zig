@@ -78,7 +78,7 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = 'c', .cmd = true, .shift = true }, .action = .copy_path },
 };
 
-fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
+pub fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
     return a.key == b.key and a.cmd == b.cmd and a.ctrl == b.ctrl and a.alt == b.alt and
         a.shift == b.shift;
 }

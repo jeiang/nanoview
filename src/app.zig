@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 const settings_mod = @import("settings.zig");
 const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
+const keymap_mod = @import("keymap.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -91,6 +92,7 @@ pub const State = struct {
     slideshow_at: ?f64 = null,
     trash_pending: bool = false,
     metadata: metadata_mod.Metadata = .{},
+    keymap: keymap_mod.Keymap = .{},
     title_buf: [title_len_max]u8 = undefined,
     title_len: u32 = 0,
     window_fitted: bool = false, // the window took a picture's size since launch
@@ -115,6 +117,7 @@ pub const State = struct {
             .gpa = gpa,
             .file_buffer = file_buffer,
             .current_pixels = current_pixels,
+            .keymap = .defaults(),
         };
         s.preload.init(io, &s.folder, pool, scratch);
         s.random_state = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)));
@@ -124,7 +127,7 @@ pub const State = struct {
 
     /// Called once, before the window opens. notify starts its timer on the first frame.
     pub fn load_settings(s: *State, directory: []const u8) void {
-        const problem = settings_mod.load(s.io, directory, &s.settings) catch |err| {
+        const problem = settings_mod.load(s.io, directory, &s.settings, &s.keymap) catch |err| {
             s.notify("settings.conf: {s}", .{@errorName(err)});
             return;
         };
