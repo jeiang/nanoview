@@ -36,7 +36,14 @@ pub fn main(init: std.process.Init) !void {
         .height = 600,
         .min_width = 320,
         .min_height = 240,
-        .title_bar = if (builtin.os.tag == .macos) .hidden else .default,
+        // macOS always draws under its title bar; nanoui's GTK window has
+        // no hidden one, so Linux keeps the system's.
+        .title_bar = if (builtin.os.tag == .macos or
+            (builtin.os.tag == .windows and state.settings.title_bar == .hidden))
+            .hidden
+        else
+            .default,
+        .always_on_top = state.settings.always_on_top,
         .content = .{ .view = .init(&state, view.view) },
     });
     const args = try init.minimal.args.toSlice(init.arena.allocator());

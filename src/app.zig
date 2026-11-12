@@ -21,6 +21,7 @@ pub const current_pixels_max: u32 = if (builtin.os.tag == .macos)
 else
     decode.pixels_max * 4;
 pub const message_len_max: u32 = 512;
+pub const title_len_max: u32 = 512;
 
 /// Pages for the large buffers. Debug builds fill `alloc` results with
 /// 0xAA, which would commit every page (about 1 GiB) at startup; the raw
@@ -90,6 +91,10 @@ pub const State = struct {
     slideshow_at: ?f64 = null,
     trash_pending: bool = false,
     metadata: metadata_mod.Metadata = .{},
+    title_buf: [title_len_max]u8 = undefined,
+    title_len: u32 = 0,
+    window_fitted: bool = false, // the window took a picture's size since launch
+    sort_fallback_told: bool = false,
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -123,7 +128,10 @@ pub const State = struct {
             s.notify("settings.conf: {s}", .{@errorName(err)});
             return;
         };
-        if (problem) |p| {
+        const p = problem orelse return;
+        if (p.line == 0) {
+            s.notify("settings.conf: {s}", .{p.reason.text()});
+        } else {
             s.notify("settings.conf line {d}: {s}", .{ p.line, p.reason.text() });
         }
     }
@@ -211,13 +219,22 @@ pub const State = struct {
     }
 
     fn rescan(s: *State) void {
-        const order = sort_order.detect(s.io, s.dir());
+        const choice = s.settings.sort;
+        if (choice == .date_created and !sort_order.has_date_created and !s.sort_fallback_told) {
+            s.sort_fallback_told = true;
+            s.notify("Sort by date created is macOS only: sorting by date modified", .{});
+        }
+        const order = sort_order.resolve(s.io, s.dir(), choice, s.settings.sort_descending);
         s.preload.lock();
         defer s.preload.unlock();
         s.folder.scan(s.io, s.dir(), order) catch {
             s.folder.reset();
             s.notify("Could not read folder", .{});
         };
+        if (choice == .random) {
+            s.random_state = folder_mod.xorshift(s.random_state);
+            s.folder.shuffle(s.random_state);
+        }
         if (s.selection_only) {
             var i = s.folder.count;
             while (i > 0) {
@@ -282,10 +299,8 @@ pub const State = struct {
         } else {
             s.read_current();
         }
-        if (s.window) |w| {
-            w.setTitle(s.basename());
-            w.redraw();
-        }
+        // The view sets the title on its next frame.
+        if (s.window) |w| w.redraw();
         assert(s.status != .empty);
     }
 
@@ -473,6 +488,41 @@ pub const State = struct {
         return s.message_buf[0..s.message_len];
     }
 
+    /// What `settings.title` asks the title bar to show.
+    pub fn title_text(s: *const State, buf: *[title_len_max]u8) []const u8 {
+        if (s.status == .empty or s.settings.title == .none) return "nanoview";
+        var writer: std.Io.Writer = .fixed(buf);
+        writer.writeAll(s.basename()) catch {};
+        if (s.settings.title != .name) {
+            if (s.index) |i| writer.print(" ({d}/{d})", .{ i + 1, s.folder.count }) catch {};
+        }
+        const sized = s.status == .shown and s.viewport_generation == s.generation;
+        if (s.settings.title == .full and sized) {
+            const vp = &s.viewport;
+            const w: u32 = @intFromFloat(vp.image_w);
+            const h: u32 = @intFromFloat(vp.image_h);
+            writer.print(" · {d}×{d} · {d}%", .{ w, h, vp.percent() }) catch {};
+        }
+        assert(writer.end <= title_len_max);
+        return buf[0..writer.end];
+    }
+
+    pub fn title(s: *const State) []const u8 {
+        assert(s.title_len <= title_len_max);
+        return s.title_buf[0..s.title_len];
+    }
+
+    /// Called each frame; the window hears only of a change.
+    pub fn update_title(s: *State) void {
+        var buf: [title_len_max]u8 = undefined;
+        const text = s.title_text(&buf);
+        if (std.mem.eql(u8, text, s.title())) return;
+        @memcpy(s.title_buf[0..text.len], text);
+        s.title_len = @intCast(text.len);
+        if (s.window) |w| w.setTitle(text);
+        assert(std.mem.eql(u8, s.title(), text));
+    }
+
     /// Back to the empty window.
     fn clear(s: *State) void {
         s.status = .empty;
@@ -480,10 +530,7 @@ pub const State = struct {
         s.index = null;
         s.path_len = 0;
         s.generation +%= 1;
-        if (s.window) |w| {
-            w.setTitle("nanoview");
-            w.redraw();
-        }
+        if (s.window) |w| w.redraw();
         assert(s.status == .empty);
     }
 
