@@ -355,6 +355,11 @@ pub const Surface = struct {
                 // another DPI: the system suggests a rect that keeps its
                 // physical size, and WM_SIZE from that reads the new scale.
                 const r: *const w.RECT = @ptrFromInt(@as(usize, @bitCast(lp)));
+                // Full screen stays the whole monitor, not the suggested rect.
+                if (self.window.full_screen) if (@import("window_place.zig").monitor(self.window)) |m| {
+                    _ = w.SetWindowPos(h, null, m.whole.left, m.whole.top, m.whole.right - m.whole.left, m.whole.bottom - m.whole.top, w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0020);
+                    return 0;
+                };
                 _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
                 return 0;
             },
