@@ -1,7 +1,8 @@
 //! What opens over the page, on a layer: tooltips after the pointer rests
 //! on something, popovers anchored to what opened them (placed where they
-//! fit, closed by Escape or a click elsewhere), and menus made of them.
-//! Each comes and goes with `ui.motion` presence.
+//! fit, closed by Escape or a click elsewhere), and menus made of them,
+//! with submenus beside their items. Each comes and goes with `ui.motion`
+//! presence.
 const std = @import("std");
 const ui = @import("../ui/ui.zig");
 const kit = @import("kit.zig");
@@ -11,7 +12,9 @@ const motion = ui.motion;
 pub const layer_popover = 20;
 pub const layer_tooltip = 30;
 
-pub const Placement = enum { bottom_start, bottom, bottom_end, top_start, top, top_end, left, right };
+/// Where a panel goes beside its anchor. `left_start` and `right_start`
+/// line its top up with the anchor's, as a submenu does.
+pub const Placement = enum { bottom_start, bottom, bottom_end, top_start, top, top_end, left, right, left_start, right_start };
 
 /// Where a panel `size` goes beside `anchor` at `placement`, turned to the
 /// other side and kept in the window when it would leave it.
@@ -35,24 +38,25 @@ pub fn place(c: *ui.Context, anchor: ui.Rect, size: ui.Size, placement: Placemen
                 else => .bottom_end,
             };
         },
-        .left => if (anchor.x - gap - size.w < 0) {
-            p = .right;
+        .left, .left_start => if (anchor.x - gap - size.w < 0) {
+            p = if (p == .left) .right else .right_start;
         },
-        .right => if (anchor.x + anchor.w + gap + size.w > W) {
-            p = .left;
+        .right, .right_start => if (anchor.x + anchor.w + gap + size.w > W) {
+            p = if (p == .right) .left else .left_start;
         },
     }
     var x: f32 = switch (p) {
         .bottom_start, .top_start => anchor.x,
         .bottom, .top => anchor.x + (anchor.w - size.w) / 2,
         .bottom_end, .top_end => anchor.x + anchor.w - size.w,
-        .left => anchor.x - gap - size.w,
-        .right => anchor.x + anchor.w + gap,
+        .left, .left_start => anchor.x - gap - size.w,
+        .right, .right_start => anchor.x + anchor.w + gap,
     };
     var y: f32 = switch (p) {
         .bottom_start, .bottom, .bottom_end => anchor.y + anchor.h + gap,
         .top_start, .top, .top_end => anchor.y - gap - size.h,
         .left, .right => anchor.y + (anchor.h - size.h) / 2,
+        .left_start, .right_start => anchor.y,
     };
     x = std.math.clamp(x, 6, @max(6, W - size.w - 6));
     y = std.math.clamp(y, 6, @max(6, H - size.h - 6));
@@ -139,14 +143,67 @@ pub const MenuItem = struct {
     checked: ?bool = null,
     /// A line between groups (the rest is ignored).
     separator: bool = false,
+    /// A submenu, beside the item while the pointer is on it or after a
+    /// click on it; one level. `menuChoice` reports what's chosen in it.
+    items: []const MenuItem = &.{},
 };
 
+pub const MenuOptions = struct {
+    placement: Placement = .bottom_start,
+    width: f32 = 220,
+    glass: bool = false,
+    /// Each item's height: 30 for touch, about 24 for a desktop's density.
+    row_height: f32 = 30,
+};
+
+/// What `menuChoice` chose: item `index`, or item `sub` of its submenu.
+pub const MenuChoice = struct { index: usize, sub: ?usize = null };
+
 /// A menu by `anchor` while `open.*`; the index of the item chosen (and
-/// then it closes).
-pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items: []const MenuItem, opts: struct { placement: Placement = .bottom_start, width: f32 = 220, glass: bool = false }) ?usize {
-    const t = kit.tokens(c);
-    const p = popover(c, id, open, anchor, .{ .placement = opts.placement, .width = opts.width, .padding = if (opts.glass) 7 else 5, .glass = opts.glass }) orelse return null;
+/// then it closes). Choices in submenus need `menuChoice`.
+pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items: []const MenuItem, opts: MenuOptions) ?usize {
+    const ch = menuChoice(c, id, open, anchor, items, opts) orelse return null;
+    return if (ch.sub == null) ch.index else null;
+}
+
+/// `menu`, with submenus: what's chosen, in the menu or a submenu.
+pub fn menuChoice(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items: []const MenuItem, opts: MenuOptions) ?MenuChoice {
+    const pad: f32 = if (opts.glass) 7 else 5;
+    // The submenu that's out, and its item's place: kept across frames.
+    c.next_key = id;
+    const out = c.state(SubmenuOut, "submenu");
+    c.next_key = null;
+    if (!open.* or out.at >= items.len or items[out.at].items.len == 0) out.at = none;
+    const p = popover(c, id, open, anchor, .{ .placement = opts.placement, .width = opts.width, .padding = pad, .glass = opts.glass }) orelse return null;
     defer p.end();
+    var chosen: ?MenuChoice = null;
+    if (menuRows(c, items, opts.row_height, out)) |i| chosen = .{ .index = i };
+    if (out.at != none) {
+        var sub_open = true;
+        const r = out.rect;
+        // Its first item beside the one it belongs to.
+        const beside: ui.Rect = .{ .x = r.x, .y = r.y - pad, .w = r.w + pad, .h = r.h };
+        if (popover(c, c.print("{s}-sub", .{id}), &sub_open, beside, .{ .placement = .right_start, .width = opts.width, .padding = pad, .gap = 2, .dismissable = false, .glass = opts.glass })) |sp| {
+            defer sp.end();
+            if (menuRows(c, items[out.at].items, opts.row_height, null)) |j| chosen = .{ .index = out.at, .sub = j };
+        }
+    }
+    if (chosen != null) {
+        open.* = false;
+        c.changed = true;
+    }
+    return chosen;
+}
+
+const none = std.math.maxInt(usize);
+
+/// The submenu that's out, moved by the pointer.
+const SubmenuOut = struct { at: usize = none, rect: ui.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 } };
+
+/// A menu's items; the index of the one clicked. `out` is null in a
+/// submenu: one level.
+fn menuRows(c: *ui.Context, items: []const MenuItem, row_height: f32, out: ?*SubmenuOut) ?usize {
+    const t = kit.tokens(c);
     var chosen: ?usize = null;
     const checks = for (items) |it| {
         if (it.checked != null) break true;
@@ -159,10 +216,17 @@ pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items
             _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = t.border }, .none, null);
             continue;
         }
-        const row = ui.div(c).row().wFull().gap(8).px(8).h(30).itemsCenter().rounded(t.radius - 2).control();
+        const row = ui.div(c).row().wFull().gap(8).px(8).h(row_height).itemsCenter().rounded(t.radius - 2).control();
         const ix = row.interaction();
         const live = !it.disabled;
-        if (live and ix.hovered) c.node(row.index).style.background = if (it.danger) t.danger.alpha(0.12) else t.surface_hover;
+        const has_sub = out != null and it.items.len > 0;
+        if (out) |o| if (live and (ix.hovered or ix.clicked)) {
+            // On an item: its submenu comes out, any other goes in.
+            o.at = if (has_sub) i else none;
+            if (ix.rect) |r| o.rect = r;
+        };
+        const lit = ix.hovered or (has_sub and out.?.at == i);
+        if (live and lit) c.node(row.index).style.background = if (it.danger) t.danger.alpha(0.12) else t.surface_hover;
         if (!live) c.node(row.index).style.opacity = 0.45;
         defer row.end();
         const fg = if (it.danger) t.danger else t.foreground;
@@ -174,12 +238,10 @@ pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items
         if (it.icon.len > 0) ui.icon(c, it.icon, .{ .size = 13, .frame = 16, .color = if (it.danger) t.danger else t.muted });
         ui.text(c, it.label, .{ .size = 13, .color = fg });
         ui.spacer(c);
-        if (it.shortcut.len > 0) ui.text(c, it.shortcut, .{ .size = 11.5, .color = t.muted });
-        if (live and ix.clicked) chosen = i;
-    }
-    if (chosen != null) {
-        open.* = false;
-        c.changed = true;
+        if (has_sub) {
+            ui.icon(c, "chevron.right", .{ .size = 9, .color = t.muted });
+        } else if (it.shortcut.len > 0) ui.text(c, it.shortcut, .{ .size = 11.5, .color = t.muted });
+        if (live and ix.clicked and !has_sub) chosen = i;
     }
     return chosen;
 }
