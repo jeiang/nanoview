@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ui = @import("nanoui").ui;
 const app = @import("app.zig");
 const view = @import("view.zig");
@@ -594,4 +595,33 @@ test "keys typed into the rename field run no actions" {
     try testing.expectEqual(@as(f32, 20), f.state.viewport.image_w);
     try testing.expectEqualStrings("a.png", f.state.basename());
     try testing.expect(f.state.rename_open);
+}
+
+test "cmd+z restores the newest trashed file and shows it, then has nothing left" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    const restore: ui.Shortcut = .{ .key = 'z', .cmd = true };
+    if (builtin.os.tag == .windows) {
+        _ = f.tester.shortcut(restore);
+        return testing.expect(f.tester.containsText("Restore is not available on Windows"));
+    }
+    // A stand-in for the Trash, so the test never touches the real one.
+    try f.tmp.dir.createDirPath(testing.io, "files");
+    try f.write_png("files/b.png", 6, 4);
+    var location_buf: [paths.path_max]u8 = undefined;
+    var original_buf: [paths.path_max]u8 = undefined;
+    const dir = f.dir_buf[0..f.dir_len];
+    f.state.trashed.push(
+        paths.join(dir, "b.png", &original_buf).?,
+        paths.join(dir, "files/b.png", &location_buf).?,
+    );
+    _ = f.tester.shortcut(restore);
+    try testing.expect(f.tester.containsText("Restored b.png"));
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    try testing.expectEqual(@as(f32, 6), f.state.viewport.image_w);
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    _ = f.tester.shortcut(restore);
+    try testing.expect(f.tester.containsText("Nothing to restore"));
 }

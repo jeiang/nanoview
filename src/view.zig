@@ -416,6 +416,7 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .info => s.info_shown = !s.info_shown,
         .trash => s.request_trash(),
         .confirm_trash => unreachable,
+        .restore => s.restore(),
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
         .rename => s.start_rename(),

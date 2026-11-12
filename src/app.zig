@@ -98,6 +98,7 @@ pub const State = struct {
     rename_focused: bool = false, // the field had the keyboard last frame
     rename_storage: [rename_bytes_max]u8 = undefined,
     rename_buffer: ui.TextBuffer = .{},
+    trashed: fileops.TrashStack = .{},
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -424,6 +425,7 @@ pub const State = struct {
 
     pub fn request_trash(s: *State) void {
         if (s.status == .empty) return;
+        if (!s.is_file()) return s.notify("This picture is not a file", .{});
         if (!s.settings.trash_confirm) return s.trash();
         s.trash_pending = true;
         s.notify("Move {s} to the Trash? Enter to confirm, Escape to cancel", .{s.basename()});
@@ -431,13 +433,15 @@ pub const State = struct {
 
     pub fn trash(s: *State) void {
         if (s.status == .empty) return;
+        if (!s.is_file()) return s.notify("This picture is not a file", .{});
         s.slideshow_at = null;
         s.trash_pending = false;
-        assert(s.path_len > 0);
-        if (!shell.trash(s.io, s.path())) {
+        var location_buf: [paths.path_max]u8 = undefined;
+        const location = shell.trash(s.io, s.path(), &location_buf) orelse {
             s.notify("Could not move {s} to the Trash", .{s.basename()});
             return;
-        }
+        };
+        if (location.len > 0) s.trashed.push(s.path(), location);
         if (s.index) |i| {
             s.preload.lock();
             s.folder.remove(i);
@@ -459,6 +463,31 @@ pub const State = struct {
             s.clear();
         }
         assert(s.status == .empty or s.path_len > 0);
+    }
+
+    /// Moves the newest file this run put in the Trash back, and shows it.
+    pub fn restore(s: *State) void {
+        if (builtin.os.tag == .windows) {
+            return s.notify("Restore is not available on Windows", .{});
+        }
+        const item = s.trashed.top() orelse return s.notify("Nothing to restore", .{});
+        const name = std.fs.path.basename(item.original());
+        // A failure keeps the entry, so Restore works once the cause is
+        // fixed, unless the file is gone for good.
+        shell.restore(s.io, item.location(), item.original()) catch |err| return switch (err) {
+            error.Exists => s.notify("{s} exists again: not restored", .{name}),
+            error.NoFolder => s.notify("The folder of {s} is gone: not restored", .{name}),
+            error.Gone => {
+                s.notify("{s} is no longer in the Trash", .{name});
+                s.trashed.pop();
+            },
+            error.Unavailable, error.Failed => s.notify("Could not restore {s}", .{name}),
+        };
+        // The popped entry's bytes stay until the next push.
+        s.trashed.pop();
+        s.open_path(item.original());
+        s.notify("Restored {s}", .{name});
+        assert(s.status != .empty);
     }
 
     /// Tells the user what a command did or could not do; the view shows it

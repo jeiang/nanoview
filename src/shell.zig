@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const native = @import("nanoui").shell;
 const paths = @import("paths.zig");
+const fileops = @import("fileops.zig");
 const assert = std.debug.assert;
 pub const attempts_max: u32 = 1024;
 pub const info_max: u32 = paths.path_max * 3 + 128;
@@ -12,13 +13,35 @@ test {
     if (builtin.os.tag == .linux) _ = @import("shell_linux.zig");
 }
 
-pub fn trash(io: std.Io, path: []const u8) bool {
+/// Returns where the file went in the Trash, for `restore`: empty when the
+/// system does not say (Windows), null when the file did not move.
+pub fn trash(io: std.Io, path: []const u8, out: *[paths.path_max]u8) ?[]const u8 {
     assert(path.len > 0);
     return switch (builtin.os.tag) {
-        .linux => @import("shell_linux.zig").trash(io, path),
-        .windows => @import("shell_windows.zig").trash(path),
-        else => native.trash(path),
+        .linux => @import("shell_linux.zig").trash(io, path, out),
+        .windows => if (@import("shell_windows.zig").trash(path)) out[0..0] else null,
+        else => native.trashTo(path, out),
     };
+}
+
+pub const RestoreError = error{ Unavailable, Exists, Gone, NoFolder, Failed };
+
+/// Moves a file `trash` put at `location` back to `original`, never over a
+/// file that took its place since.
+pub fn restore(io: std.Io, location: []const u8, original: []const u8) RestoreError!void {
+    assert(original.len > 0);
+    // The Recycle Bin's own undelete is not a documented interface.
+    if (builtin.os.tag == .windows) return error.Unavailable;
+    assert(location.len > 0);
+    fileops.move_no_replace(location, original) catch |err| switch (err) {
+        error.Exists => return error.Exists,
+        error.Failed => return error.Failed,
+        error.Missing => {
+            std.Io.Dir.cwd().access(io, location, .{}) catch return error.Gone;
+            return error.NoFolder;
+        },
+    };
+    if (builtin.os.tag == .linux) @import("shell_linux.zig").forget(location);
 }
 
 pub fn reveal(path: []const u8) void {
@@ -103,4 +126,29 @@ test "trash names and directory selection are bounded and deterministic" {
     try t.expect(home_trash(null, null, &out) == null);
     try t.expectEqualStrings("/usb/.Trash/42", mount_trash("/usb", 42, true, &out).?);
     try t.expectEqualStrings("/.Trash-42", mount_trash("/", 42, false, &out).?);
+}
+
+test "restore refuses a taken name, a missing folder, and a file no longer there" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(t.io, "files");
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "files/a.png", .data = "picture" });
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "a.png", .data = "new" });
+    var dir_buf: [paths.path_max]u8 = undefined;
+    const dir = dir_buf[0..try tmp.dir.realPathFile(t.io, ".", &dir_buf)];
+    var location_buf: [paths.path_max]u8 = undefined;
+    var original_buf: [paths.path_max]u8 = undefined;
+    var lost_buf: [paths.path_max]u8 = undefined;
+    const location = paths.join(dir, "files/a.png", &location_buf).?;
+    const original = paths.join(dir, "a.png", &original_buf).?;
+    const lost = paths.join(dir, "gone/a.png", &lost_buf).?;
+    try t.expectError(error.Exists, restore(t.io, location, original));
+    try t.expectError(error.NoFolder, restore(t.io, location, lost));
+    try tmp.dir.deleteFile(t.io, "a.png");
+    try restore(t.io, location, original);
+    var data: [16]u8 = undefined;
+    try t.expectEqualStrings("picture", try tmp.dir.readFile(t.io, "a.png", &data));
+    try t.expectError(error.Gone, restore(t.io, location, original));
 }
