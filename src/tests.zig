@@ -980,7 +980,9 @@ test "cmd+v opens pasted file paths and file URLs like a drop" {
     var buf: [paths.path_max]u8 = undefined;
     const b = paths.join(f.dir_buf[0..f.dir_len], "b.png", &buf).?;
     var text_buf: [paths.path_max + 16]u8 = undefined;
-    pasted.text = try std.fmt.bufPrint(&text_buf, "file://{s}\n", .{b});
+    // A Windows path has no leading slash: `file:///C:\...`.
+    const scheme = if (b[0] == '/') "file://" else "file:///";
+    pasted.text = try std.fmt.bufPrint(&text_buf, "{s}{s}\n", .{ scheme, b });
     _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
     try testing.expectEqualStrings("b.png", f.state.basename());
     try testing.expectEqual(@as(u32, 2), f.state.folder.count);
@@ -1392,6 +1394,7 @@ test "pages of a TIFF and sizes of an icon turn with page down and page up" {
     try f.open("b.ico");
     try testing.expectEqual(@as(u32, 2), f.state.page_count);
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    try testing.expect(f.tester.containsText("Page 2 of 2"));
     // ImageIO reads no icon size under 16 pixels.
     try testing.expect(f.tester.containsText("16×16"));
     try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 255));
@@ -1510,8 +1513,9 @@ test "save failure cannot truncate an existing destination" {
     var buf: [paths.path_max]u8 = undefined;
     const target = saved_path(f, "existing.png", &buf);
     // Existing file is writable, but the directory cannot create the temporary PNG.
-    try f.tmp.dir.setPermissions(testing.io, .fromMode(0o500));
-    defer f.tmp.dir.setPermissions(testing.io, .fromMode(0o700)) catch unreachable;
+    // By path: Linux opens the test folder with O_PATH, which fchmod refuses.
+    try f.tmp.dir.setFilePermissions(testing.io, ".", .fromMode(0o500), .{});
+    defer f.tmp.dir.setFilePermissions(testing.io, ".", .fromMode(0o700), .{}) catch unreachable;
     save_mod.save_to(f.state, target);
     f.tester.frame();
     try testing.expect(f.tester.containsText("Cannot save the frame"));
