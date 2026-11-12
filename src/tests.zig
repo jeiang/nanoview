@@ -220,3 +220,131 @@ test "a failed trash says so, then the message goes away" {
     f.tester.advance(5);
     try testing.expect(!f.tester.containsText("Could not move"));
 }
+
+test "Home End Space and random navigate without repeating" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png", "c.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("b.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.home });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.end });
+    try testing.expectEqualStrings("c.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ' ', .shift = true });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ' ' });
+    try testing.expectEqualStrings("c.png", f.state.basename());
+    for (0..32) |_| {
+        const old = f.state.index;
+        _ = f.tester.shortcut(.{ .key = 'x' });
+        try testing.expect(old != f.state.index);
+    }
+}
+
+test "loop off stays put at either end" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.write_png("b.png", 4, 4);
+    try f.open("a.png");
+    f.state.settings.loop = false;
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.left });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expect(f.tester.containsText("First picture"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.end });
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    try testing.expect(f.tester.containsText("Last picture"));
+}
+
+test "a changed folder rescans additions and a deleted current file" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    try f.write_png("b.png", 4, 4);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    try f.write_png("c.png", 4, 4);
+    try f.tmp.dir.deleteFile(testing.io, "b.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("c.png", f.state.basename());
+}
+
+test "opening a directory selects its first picture and empty folders say so" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("b.png", 4, 4);
+    try f.write_png("a.png", 4, 4);
+    f.state.open_path(f.dir_buf[0..f.dir_len]);
+    f.tester.frame();
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try f.tmp.dir.createDirPath(testing.io, "empty");
+    try f.open("empty");
+    try testing.expect(f.tester.containsText("No pictures in this folder"));
+}
+
+test "multiple open files limit navigation and reload retains that selection" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png", "c.png" }) |n| try f.write_png(n, 4, 4);
+    var a: [paths.path_max]u8 = undefined;
+    var c: [paths.path_max]u8 = undefined;
+    const pa = paths.join(f.dir_buf[0..f.dir_len], "a.png", &a).?;
+    const pc = paths.join(f.dir_buf[0..f.dir_len], "c.png", &c).?;
+    State.on_open_files(f.state, &.{ pc, pa });
+    f.tester.frame();
+    try testing.expectEqualStrings("c.png", f.state.basename());
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try f.write_png("a.png", 8, 6);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.f(5) });
+    try testing.expectEqual(@as(f32, 8), f.state.viewport.image_w);
+    try testing.expectEqual(@as(u32, 2), f.state.folder.count);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("PNG"));
+}
+
+test "slideshow advances restarts its timer reverses and stops at an end" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    for ([_][]const u8{ "a.png", "b.png", "c.png" }) |n| try f.write_png(n, 4, 4);
+    try f.open("a.png");
+    f.state.settings.slideshow_seconds = 1;
+    _ = f.tester.shortcut(.{ .key = 's' });
+    f.tester.advance(1.1);
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.left });
+    f.tester.advance(0.5);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    f.tester.advance(0.6);
+    try testing.expectEqualStrings("b.png", f.state.basename());
+    f.state.settings.slideshow_reverse = true;
+    f.state.settings.loop = false;
+    f.tester.advance(2.2);
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expect(!f.state.slideshow_running);
+    try testing.expect(f.tester.containsText("First picture"));
+}
+
+test "trash confirmation cancels and Enter accepts without touching system trash" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try f.open("a.png");
+    f.state.settings.trash_confirm = true;
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.forward_delete });
+    try testing.expect(f.tester.containsText("Move a.png to the Trash?"));
+    f.tester.advance(5);
+    try testing.expect(f.state.trash_pending);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.escape });
+    try testing.expect(!f.state.trash_pending);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.forward_delete });
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(!f.state.trash_pending);
+    try f.tmp.dir.deleteFile(testing.io, "a.png");
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.forward_delete });
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.enter });
+    try testing.expect(f.tester.containsText("Could not move a.png to the Trash"));
+}
