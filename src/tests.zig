@@ -26,6 +26,7 @@ test {
     _ = @import("wuffs.zig");
     _ = @import("decode_windows.zig");
     _ = @import("sniff.zig");
+    _ = @import("exif.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -180,6 +181,32 @@ test "a JPEG named b.png shows and the info line says JPEG" {
     _ = f.tester.shortcut(.{ .key = 'i' });
     try testing.expect(f.tester.containsText("JPEG ·"));
     try testing.expect(!f.tester.containsText("PNG ·"));
+}
+
+test "e lists the EXIF details of a camera JPEG and says when a file has none" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    const jpeg = @embedFile("testdata/exif.jpeg");
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.jpg", .data = jpeg });
+    try f.write_png("b.png", 8, 8);
+    try f.open("a.jpg");
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    const want = [_][]const u8{
+        "Camera: Canon EOS R5",       "Lens: RF24-70mm F2.8 L IS USM",
+        "Taken: 2024-05-01 12:34:56", "Exposure: 1/250 s",
+        "Aperture: f/2.8",            "ISO: 200",
+        "Focal length: 50.0 mm",      "Flash: fired",
+        "Pixels: 32 × 32",
+        "GPS: 48.858370, 2.294481",   "Software: nanoview test",
+        "Color space: sRGB",
+    };
+    for (want) |line| try testing.expect(f.tester.containsText(line));
+    // The panel follows the next picture, and goes away on a second press.
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expect(f.tester.containsText("No EXIF data"));
+    try testing.expect(!f.tester.containsText("Camera:"));
+    _ = f.tester.shortcut(.{ .key = 'e' });
+    try testing.expect(!f.tester.containsText("No EXIF data"));
 }
 
 test "r turns the view a quarter and i shows the upright size" {

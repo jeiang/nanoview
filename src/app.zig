@@ -16,6 +16,7 @@ const shell = @import("shell.zig");
 const keymap_mod = @import("keymap.zig");
 const recent_mod = @import("recent.zig");
 const sniff = @import("sniff.zig");
+const exif = @import("exif.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -81,6 +82,8 @@ pub const State = struct {
     mirror: bool = false,
     flip: bool = false,
     info_shown: bool = false,
+    details_shown: bool = false,
+    details: exif.Details = .{},
     drag_last: ?ui.Point = null,
     message_buf: [message_len_max]u8 = undefined,
     message_len: u32 = 0,
@@ -353,6 +356,7 @@ pub const State = struct {
         s.promoted = false;
         s.slideshow_at = null;
         s.metadata.load(s.io, s.path());
+        if (s.details_shown) s.details.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
         if (slot) |n| {
