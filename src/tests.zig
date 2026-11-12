@@ -20,6 +20,7 @@ test {
     _ = @import("actions.zig");
     _ = @import("settings.zig");
     _ = @import("decode.zig");
+    _ = @import("decode_windows.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the

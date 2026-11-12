@@ -43,7 +43,8 @@ pub fn decode_fit(bytes: []const u8, out: []u8, bw: u32, bh: u32) !Size {
 pub const known_extensions = [_][]const u8{
     "avif", "heic", "heif", "webp", "tif", "tiff", "bmp", "dib", "ico", "cur",
     "ani",  "pnm",  "pbm",  "pgm",  "ppm", "pam",  "pcx", "ras", "tga", "targa",
-    "xbm",  "xpm",  "icns", "jxl",  "jp2", "j2k",  "jpf", "jpx", "qoi",
+    "xbm",  "xpm",  "icns", "jxl",  "jp2", "j2k",  "jpf", "jpx", "qoi", "dds",
+    "jxr",  "wdp",
 };
 pub fn intersect(names: []const []const u8, out: [][]const u8) usize {
     assert(names.len <= 256);

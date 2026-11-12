@@ -18,11 +18,6 @@ pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
         "tif", "tiff", "bmp",  "ico", "jp2",  "psd", "icns", "tga",  "exr",  "sgi",
         "pbm",
     }
-else if (builtin.os.tag == .windows)
-    &.{
-        "png",  "jpg",  "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp",
-        "heic", "heif", "avif", "jxl", "dds", "jxr", "wdp",
-    }
 else
     baseline_extensions;
 
@@ -31,12 +26,17 @@ const extensions_max: u32 = 64;
 var extension_table: [extensions_max][]const u8 = undefined;
 var extensions_initialized = false;
 
+/// Linux and Windows add the installed system decoders to the baseline;
+/// a failed enumeration leaves the baseline alone.
 pub fn init_extensions() void {
-    if (builtin.os.tag != .linux or extensions_initialized) return;
+    if (extensions_initialized) return;
+    const rest = extension_table[baseline_extensions.len..];
+    const count = switch (builtin.os.tag) {
+        .linux => @import("decode_linux.zig").extensions(rest),
+        .windows => @import("decode_windows.zig").extensions(rest),
+        else => return,
+    };
     @memcpy(extension_table[0..baseline_extensions.len], baseline_extensions);
-    const count = @import("decode_linux.zig").extensions(
-        extension_table[baseline_extensions.len..],
-    );
     extensions = extension_table[0 .. baseline_extensions.len + count];
     extensions_initialized = true;
     assert(extensions.len >= baseline_extensions.len);
