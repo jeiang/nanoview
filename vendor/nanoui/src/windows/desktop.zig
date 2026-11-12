@@ -3,6 +3,7 @@
 const std = @import("std");
 const w = @import("win32.zig");
 const dib = @import("dib.zig");
+const fdwatch = @import("fdwatch.zig");
 
 const CF_UNICODETEXT = 13;
 const CF_DIB = 8;
@@ -71,7 +72,7 @@ pub const clipboard = struct {
         _ = std.unicode.utf8ToUtf16Le(p[0..n], text) catch {};
         p[n] = 0;
         _ = w.GlobalUnlock(mem);
-        if (w.OpenClipboard(null) == 0) return;
+        if (!openToWrite()) return;
         defer _ = w.CloseClipboard();
         _ = w.EmptyClipboard();
         if (w.SetClipboardData(CF_UNICODETEXT, mem) == null) return;
@@ -99,7 +100,7 @@ pub const clipboard = struct {
             const units = std.unicode.calcUtf16LeLen(f) catch 0;
             if (units > 0) drop = block(@sizeOf(DROPFILES) + (units + 2) * 2, f, fillDrop);
         }
-        if (w.OpenClipboard(null) == 0) return false;
+        if (!openToWrite()) return false;
         defer _ = w.CloseClipboard();
         _ = w.EmptyClipboard();
         if (w.SetClipboardData(CF_DIBV5, image) == null) return false;
@@ -167,6 +168,13 @@ pub const clipboard = struct {
     fn locked(mem: *anyopaque) ?[]const u8 {
         const p: [*]const u8 = @ptrCast(w.GlobalLock(mem) orelse return null);
         return p[0..w.GlobalSize(mem)];
+    }
+
+    /// Opens the clipboard owned by a window of the app's: with no window,
+    /// EmptyClipboard leaves no owner and SetClipboardData then fails.
+    fn openToWrite() bool {
+        const owner = fdwatch.messageWindow() orelse return false;
+        return w.OpenClipboard(owner) != 0;
     }
 };
 

@@ -27,6 +27,8 @@ test {
     _ = @import("wuffs.zig");
     _ = @import("decode_windows.zig");
     _ = @import("fileops.zig");
+    _ = @import("instance.zig");
+    if (builtin.os.tag != .windows) _ = @import("instance_posix.zig");
 }
 
 /// What the stand-in clipboard holds: tests never read the real one.

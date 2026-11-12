@@ -81,6 +81,8 @@ pub const Settings = struct {
     always_on_top: bool = false,
     /// Keep a list of recently opened files.
     recent: bool = true,
+    /// A second nanoview hands its files to the running one and exits.
+    single_instance: bool = false,
 };
 
 pub const Reason = enum {

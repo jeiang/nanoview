@@ -894,6 +894,15 @@ pub const State = struct {
         if (!s.selection.add(name)) s.selection_only = false;
     }
 
+    /// Another nanoview handed over its files: open them like a drop, and
+    /// come to the front either way.
+    pub fn on_instance(ctx: *anyopaque, files: []const []const u8) void {
+        const s: *State = @ptrCast(@alignCast(ctx));
+        assert(s.path_len <= paths.path_max);
+        if (files.len > 0) s.open_paths(files);
+        if (s.window) |w| w.focus();
+    }
+
     pub fn on_open_files(ctx: *anyopaque, files: []const []const u8) void {
         const s: *State = @ptrCast(@alignCast(ctx));
         assert(s.path_len <= paths.path_max);
