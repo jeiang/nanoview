@@ -57,7 +57,7 @@ marks for the switches, and the recent files. macOS has the same commands in the
 | `e` | Show EXIF details: camera, lens, date, exposure, GPS, color profile |
 | `f`, Escape | Full screen, leave full screen |
 | Cmd+Backspace, Forward Delete | Move to Trash |
-| Cmd/Ctrl+Z | Put back the last picture moved to the Trash (not on Windows) |
+| Cmd/Ctrl+Z | Put back the last picture moved to the Trash or Recycle Bin |
 | F2 | Rename: Enter renames, Escape cancels; an existing file is never replaced |
 | Cmd/Ctrl+C | Copy the picture at full size; on macOS and Windows the file goes with it |
 | Cmd/Ctrl+V | Open copied files, or show a copied picture |
@@ -68,7 +68,8 @@ marks for the switches, and the recent files. macOS has the same commands in the
 
 Rotation, mirror and flip change the view only: nothing is written to disk. The folder is read
 again before a step when it changed on disk. A command that fails says so in the window.
-Put back remembers up to 16 pictures trashed since the program started. A pasted picture is
+Put back remembers up to 16 pictures trashed since the program started, restores only the
+file nanoview moved, and never replaces a file that took its place. A pasted picture is
 shown as "Clipboard": it is not a file, so the step keys do nothing, and trash, reveal and
 rename say so.
 
@@ -158,11 +159,18 @@ The recent list is a text file, one path per line, newest first: `recent` beside
 `settings.conf` on macOS, `$XDG_STATE_HOME/nanoview/recent` (default `~/.local/state/`) on
 Linux and `%LOCALAPPDATA%\nanoview\recent` on Windows.
 
+With `single_instance = true`, a second nanoview hands its files to the running one and
+exits. On Linux this needs `XDG_RUNTIME_DIR`; without it the setting is off and the window
+says so. On macOS the app already opens files in its running window; the setting adds the
+same for `nanoview` started from a terminal.
+
 ### Linux and Windows
 
 These builds are compiled and unit-tested from macOS but have not been run on those systems
 yet. On Linux, Move to Trash follows the FreeDesktop.org Trash specification; on Windows it
 uses the Recycle Bin. On Windows, Ctrl+wheel zooms continuously, the same as a touchpad pinch.
+With `title_bar = hidden` on Linux, close the window with the keyboard or the window manager;
+some window managers also drop the resize edges.
 
 ## Build
 

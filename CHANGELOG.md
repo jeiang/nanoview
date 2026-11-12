@@ -34,7 +34,7 @@ section that matches its tag.
   sort order, the title text, a hidden title bar (Windows, Linux) and always on top (`t`).
 - Keys can be rebound with `key.<action>` lines in `settings.conf`.
 - Opened files and folders are remembered in a recent list.
-- Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z, not on Windows),
+- Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z),
   copy the picture (Cmd/Ctrl+C) and paste files or a picture (Cmd/Ctrl+V).
 - `single_instance` setting: starting nanoview again hands its files to the running window.
 - BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
