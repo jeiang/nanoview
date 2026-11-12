@@ -149,6 +149,7 @@ pub const Api3 = struct {
 /// signals, a draw function, and a clipboard and dialogs that answer later.
 pub const Api4 = struct {
     gtk_gesture_zoom_new: *const fn () callconv(.c) *anyopaque,
+    gtk_gesture_single_get_current_button: *const fn (gesture: *anyopaque) callconv(.c) c_uint,
     gtk_event_controller_get_current_event: *const fn (controller: *anyopaque) callconv(.c) ?*anyopaque,
     gdk_scroll_event_get_direction: *const fn (event: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn () callconv(.c) c_int,

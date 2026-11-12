@@ -28,7 +28,7 @@ pub fn attachArea(s: *Surface) void {
     } else g4.gtk_drawing_area_set_draw_func(area, onDraw, s, null);
     gtk.connect(area, "resize", @ptrCast(&onResize), s);
     const click = g4.gtk_gesture_click_new();
-    g4.gtk_gesture_single_set_button(click, 1);
+    g4.gtk_gesture_single_set_button(click, 0);
     gtk.connect(click, "pressed", @ptrCast(&onPressed), s);
     gtk.connect(click, "released", @ptrCast(&onReleased), s);
     g4.gtk_widget_add_controller(area, click);
@@ -84,6 +84,13 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
     const s = of(data);
     gtk.api.gtk_widget_grab_focus(s.area);
     at(s, gesture, x, y);
+    const button = gtk.v4api.gtk_gesture_single_get_current_button(gesture);
+    s.ctx.input.button = switch (button) {
+        1 => .left,
+        8 => .back,
+        9 => .forward,
+        else => return,
+    };
     // GTK 4 counts the clicks itself: a double click's second press says 2.
     s.ctx.input.click_count = @intCast(@max(1, n_press));
     s.ctx.updateHot();
@@ -94,6 +101,8 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
 fn onReleased(gesture: *anyopaque, _: c_int, x: f64, y: f64, data: ?*anyopaque) callconv(.c) void {
     const s = of(data);
     at(s, gesture, x, y);
+    const button = gtk.v4api.gtk_gesture_single_get_current_button(gesture);
+    if (button != 1 and button != 8 and button != 9) return;
     surface.released(s);
 }
 

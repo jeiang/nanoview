@@ -450,6 +450,7 @@ pub const Surface = struct {
             },
             w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK => {
                 self.setMouse(lp);
+                self.ctx.input.button = .left;
                 self.ctx.input.click_count = if (msg == w.WM_LBUTTONDBLCLK) 2 else 1;
                 self.ctx.updateHot();
                 // A borderless window's drag handle (`window_drag`): the press
@@ -474,6 +475,20 @@ pub const Surface = struct {
                 self.ctx.updateHot();
                 self.ctx.pointerUp();
                 self.frame();
+            },
+            0x020B, 0x020C => { // WM_XBUTTONDOWN / WM_XBUTTONUP
+                self.setMouse(lp);
+                self.ctx.input.button = if ((wp >> 16) & 0xffff == 1) .back else .forward;
+                self.ctx.updateHot();
+                if (msg == 0x020B) {
+                    _ = w.SetCapture(h);
+                    self.ctx.pointerDown();
+                } else {
+                    _ = w.ReleaseCapture();
+                    self.ctx.pointerUp();
+                }
+                self.frame();
+                return 1;
             },
             w.WM_MOUSEWHEEL => {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };

@@ -356,6 +356,14 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
     g.gtk_widget_grab_focus(w);
     var button: c_uint = 0;
     _ = gtk.v3.gdk_event_get_button(e, &button);
+    if (button == 8 or button == 9) {
+        s.setMouse(e);
+        s.ctx.input.button = if (button == 8) .back else .forward;
+        s.ctx.updateHot();
+        s.ctx.pointerDown();
+        s.frame();
+        return 1;
+    }
     if (button == 3) {
         s.setMouse(e);
         s.ctx.updateHot();
@@ -364,6 +372,7 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
         return 1;
     }
     if (button != 1) return 0;
+    s.ctx.input.button = .left;
     s.setMouse(e);
     var count: c_uint = 1;
     _ = gtk.v3.gdk_event_get_click_count(e, &count);
@@ -386,7 +395,7 @@ fn onRelease(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_in
     const s = of(data);
     var button: c_uint = 0;
     _ = gtk.v3.gdk_event_get_button(e, &button);
-    if (button != 1) return 0;
+    if (button != 1 and button != 8 and button != 9) return 0;
     s.setMouse(e);
     released(s);
     return 1;

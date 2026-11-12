@@ -286,7 +286,7 @@ pub const Tester = struct {
         t.clickWith(.middle, x, y);
     }
 
-    fn clickWith(t: *Tester, button: @import("input.zig").Button, x: f32, y: f32) void {
+    pub fn clickWith(t: *Tester, button: @import("input.zig").Button, x: f32, y: f32) void {
         t.ctx.input.button = button;
         t.click(x, y);
         t.ctx.input.button = .left;
