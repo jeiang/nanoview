@@ -58,10 +58,9 @@ pub fn main(init: std.process.Init) !void {
         .height = 600,
         .min_width = 320,
         .min_height = 240,
-        // macOS always draws under its title bar; nanoui's GTK window has
-        // no hidden one, so Linux keeps the system's.
-        .title_bar = if (builtin.os.tag == .macos or
-            (builtin.os.tag == .windows and state.settings.title_bar == .hidden))
+        // macOS always draws under its title bar. On Windows and Linux the
+        // hidden bar is opt-in; nanoui makes its top band move the window.
+        .title_bar = if (builtin.os.tag == .macos or state.settings.title_bar == .hidden)
             .hidden
         else
             .default,
