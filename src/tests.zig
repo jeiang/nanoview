@@ -1460,3 +1460,23 @@ test "a finished play-once GIF restarts and stepping shows paused" {
     try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
     try testing.expect(f.tester.containsText("frame 1/2, paused"));
 }
+
+test "save failure cannot truncate an existing destination" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 3);
+    try f.open("a.png");
+    try write_file(f, "existing.png", "original bytes");
+    var buf: [paths.path_max]u8 = undefined;
+    const target = saved_path(f, "existing.png", &buf);
+    // Existing file is writable, but the directory cannot create the temporary PNG.
+    try f.tmp.dir.setPermissions(testing.io, .fromMode(0o500));
+    defer f.tmp.dir.setPermissions(testing.io, .fromMode(0o700)) catch unreachable;
+    save_mod.save_to(f.state, target);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Cannot save the frame"));
+    var back: [64]u8 = undefined;
+    const bytes = try f.tmp.dir.readFile(testing.io, "existing.png", &back);
+    try testing.expectEqualStrings("original bytes", bytes);
+}

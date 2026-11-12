@@ -47,14 +47,11 @@ pub fn save_to(s: *State, target: []const u8) void {
 fn write_frame(s: *State, target: []const u8) !void {
     if (s.status != .shown) return error.NothingShown;
     const frame = try full_frame(s);
-    const cwd = std.Io.Dir.cwd();
-    const file = try cwd.createFile(s.io, target, .{});
-    s.png.write(s.io, file, frame) catch |err| {
-        file.close(s.io);
-        cwd.deleteFile(s.io, target) catch {};
-        return err;
-    };
-    file.close(s.io);
+    // The destination is untouched until the complete PNG replaces it.
+    var pending = try std.Io.Dir.cwd().createFileAtomic(s.io, target, .{ .replace = true });
+    defer pending.deinit(s.io);
+    try s.png.write(s.io, pending.file, frame);
+    try pending.replace(s.io);
 }
 
 /// The animation's canvas, full-size pixels as shown, or the file decoded again.
