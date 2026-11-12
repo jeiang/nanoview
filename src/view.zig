@@ -46,6 +46,7 @@ fn body(s: *State, c: *ui.Context) void {
         return;
     }
     s.viewport.set_view(c.size.w, c.size.h, c.scale);
+    fit_options(s);
     preload_bounds(s, c);
     pointer(s, c);
     if (s.source == .pixels and !s.promote_failed and needs_promote(s, c)) s.promote();
@@ -95,7 +96,10 @@ fn new_picture(s: *State, c: *ui.Context, key: []const u8) void {
             return;
         },
     }
-    reset_viewport(s, c);
+    const previous = s.viewport;
+    const carry = s.settings.zoom_lock and s.viewport_generation != 0;
+    reset_viewport(s, c, !carry);
+    if (carry) s.viewport.carry(previous);
     s.viewport_generation = s.generation;
     assert(s.base.raw_w > 0 and s.base.raw_h > 0);
 }
@@ -145,6 +149,7 @@ fn draw(s: *State, c: *ui.Context, key: []const u8) void {
     const turns = s.base.turns +% s.turns_user;
     const v = s.viewport.visible(turns) orelse return;
     assert(v.box.w > 0 and v.box.h > 0);
+    if (s.settings.checkerboard) checkerboard(s, c);
     const angle = @as(f32, @floatFromInt(turns)) * std.math.pi / 2;
     const turn = ui.div(c).absolute().offset(v.box.x, v.box.y).rotate(angle);
     defer turn.end();
@@ -158,19 +163,27 @@ fn draw(s: *State, c: *ui.Context, key: []const u8) void {
         .source = source,
         .box = .{ .w = v.box.w, .h = v.box.h },
         .part = v.part,
+        .sampling = if (!s.settings.smooth and s.viewport.percent() > 100) .nearest else .linear,
         .radius = 0,
     });
 }
 
 /// Back to fit, for a new picture or a new turn.
-fn reset_viewport(s: *State, c: *ui.Context) void {
+fn reset_viewport(s: *State, c: *ui.Context, resize: bool) void {
     assert(s.base.raw_w > 0 and s.base.raw_h > 0);
     const odd = s.turns_user % 2 == 1;
     const w = if (odd) s.base.raw_h else s.base.raw_w;
     const h = if (odd) s.base.raw_w else s.base.raw_h;
-    s.viewport = .{ .image_w = w, .image_h = h };
-    assert(s.viewport.fit);
-    resize_window(s, c);
+    s.viewport = .{
+        .image_w = w,
+        .image_h = h,
+        .mirror = s.mirror,
+        .flip = s.flip,
+        .fit_mode = s.settings.fit_mode,
+        .fit_upscale = s.settings.fit_upscale,
+    };
+    s.viewport.set_view(c.size.w, c.size.h, c.scale);
+    if (resize) resize_window(s, c);
 }
 
 /// View only: nothing is written to disk.
@@ -178,7 +191,7 @@ fn rotate(s: *State, c: *ui.Context, quarter: u2) void {
     if (s.status != .shown or s.viewport_generation != s.generation) return;
     assert(quarter == 1 or quarter == 3);
     s.turns_user +%= quarter;
-    reset_viewport(s, c);
+    reset_viewport(s, c, true);
 }
 
 const window_w_min: f64 = 320;
@@ -242,7 +255,8 @@ fn pointer(s: *State, c: *ui.Context) void {
             vp.pan(in.scroll.x, in.scroll.y);
         } else if (in.scroll.y != 0) {
             // One step per wheel event, whatever its unit.
-            const factor = if (in.scroll.y > 0) viewport.zoom_step else 1 / viewport.zoom_step;
+            const step = zoom_step(s);
+            const factor = if (in.scroll.y > 0) step else 1 / step;
             vp.zoom_about(in.mouse.x, in.mouse.y, factor);
         }
     }
@@ -256,7 +270,7 @@ fn pointer(s: *State, c: *ui.Context) void {
         }
     }
     if (in.released) s.drag_last = null;
-    assert(vp.scale >= vp.scale_fit() and vp.scale <= vp.scale_max());
+    assert(vp.scale >= vp.scale_min() and vp.scale <= vp.scale_max());
 }
 
 /// On macOS the top band of a window with a hidden title bar moves the window.
@@ -313,10 +327,11 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .open => s.open_dialog(),
         .next => s.step(1),
         .previous => s.step(-1),
-        .zoom_in => if (shown) vp.zoom_about(cx, cy, viewport.zoom_step),
-        .zoom_out => if (shown) vp.zoom_about(cx, cy, 1 / viewport.zoom_step),
+        .zoom_in => if (shown) vp.zoom_about(cx, cy, zoom_step(s)),
+        .zoom_out => if (shown) vp.zoom_about(cx, cy, 1 / zoom_step(s)),
         .fit => if (shown) vp.set_fit(),
         .actual => if (shown) vp.set_actual(),
+        .fit_upscale, .fit_mode, .smooth, .zoom_lock, .checkerboard, .mirror, .flip => option(s, action),
         .full_screen => if (s.window) |w| w.setFullScreen(!w.isFullScreen()),
         .leave_full_screen => if (s.window) |w| w.setFullScreen(false),
         .rotate_right => rotate(s, c, 1),
@@ -325,5 +340,77 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .trash => s.trash(),
         .reveal => s.reveal(),
         .copy_path => s.copy_path(),
+    }
+}
+
+fn zoom_step(s: *const State) f32 {
+    assert(s.settings.zoom_step_percent > 0);
+    const result = 1 + @as(f32, @floatFromInt(s.settings.zoom_step_percent)) / 100;
+    assert(result > 1 and std.math.isFinite(result));
+    return result;
+}
+
+fn fit_options(s: *State) void {
+    s.viewport.fit_mode = s.settings.fit_mode;
+    s.viewport.fit_upscale = s.settings.fit_upscale;
+    s.viewport.mirror = s.mirror;
+    s.viewport.flip = s.flip;
+    s.viewport.settle();
+    assert(s.viewport.scale >= s.viewport.scale_min());
+    assert(s.viewport.scale <= s.viewport.scale_max());
+}
+
+fn option(s: *State, action: actions.Action) void {
+    const opts = &s.settings;
+    if (action == .fit_mode) {
+        opts.fit_mode = switch (opts.fit_mode) {
+            .whole => .width,
+            .width => .height,
+            .height => .fill,
+            .fill => .whole,
+        };
+        fit_options(s);
+        s.viewport.set_fit();
+        s.notify("Fit: {s}", .{@tagName(opts.fit_mode)});
+        return;
+    }
+    const value: *bool, const name: []const u8 = switch (action) {
+        .fit_upscale => .{ &opts.fit_upscale, "Fit upscale" },
+        .smooth => .{ &opts.smooth, "Smooth" },
+        .zoom_lock => .{ &opts.zoom_lock, "Zoom lock" },
+        .checkerboard => .{ &opts.checkerboard, "Checkerboard" },
+        .mirror => .{ &s.mirror, "Mirror" },
+        .flip => .{ &s.flip, "Flip" },
+        else => unreachable,
+    };
+    value.* = !value.*;
+    fit_options(s);
+    assert(s.viewport.mirror == s.mirror and s.viewport.flip == s.flip);
+    s.notify("{s}: {s}", .{ name, if (value.*) "on" else "off" });
+}
+
+const checker_side_min: f32 = 16;
+const checker_cells_max: u32 = 64;
+
+fn checkerboard(s: *const State, c: *ui.Context) void {
+    const vp = &s.viewport;
+    const x0 = @max(0, vp.x);
+    const y0 = @max(0, vp.y);
+    const w = @min(c.size.w, vp.x + vp.image_w * vp.scale) - x0;
+    const h = @min(c.size.h, vp.y + vp.image_h * vp.scale) - y0;
+    assert(w > 0 and h > 0);
+    const side = @max(checker_side_min, @max(w, h) / checker_cells_max);
+    for (0..checker_cells_max) |row| {
+        const y = @as(f32, @floatFromInt(row)) * side;
+        if (y >= h) break;
+        for (0..checker_cells_max) |col| {
+            const x = @as(f32, @floatFromInt(col)) * side;
+            if (x >= w) break;
+            const gray: f32 = if ((row + col) % 2 == 0) 0.7 else 0.9;
+            const cell = ui.div(c).absolute().offset(x0 + x, y0 + y)
+                .size(@min(side, w - x), @min(side, h - y))
+                .bg(.{ .r = gray, .g = gray, .b = gray });
+            cell.end();
+        }
     }
 }
