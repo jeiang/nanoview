@@ -6,6 +6,7 @@ const view = @import("view.zig");
 const preload = @import("preload.zig");
 const settings = @import("settings.zig");
 const recent = @import("recent.zig");
+const instance = @import("instance.zig");
 const State = app_state.State;
 
 // About 1.2 MiB: never on the stack.
@@ -25,6 +26,18 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.free_pages(current_pixels);
     state.init(init.io, init.gpa, file_buffer, pool, scratch, current_pixels);
     load_settings(init);
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    var files: [@import("folder.zig").entries_max][]const u8 = undefined;
+    var count: u32 = 0;
+    const arguments = args[@min(args.len, 1)..];
+    for (arguments[0..@min(arguments.len, files.len)]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--")) continue;
+        if (count == files.len) break;
+        files[count] = arg;
+        count += 1;
+    }
+    // Before the window: a process that hands its files over shows none.
+    if (state.settings.single_instance and instance.hand_over(init.io, files[0..count])) return;
     load_recent(init);
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{
@@ -48,18 +61,13 @@ pub fn main(init: std.process.Init) !void {
         .always_on_top = state.settings.always_on_top,
         .content = .{ .view = .init(&state, view.view) },
     });
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (state.settings.single_instance) {
+        instance.platform.listen(&state, State.on_instance) catch |err| {
+            state.notify("Single instance: {s}", .{@errorName(err)});
+        };
+    }
     try state.preload.start();
     defer state.preload.stop();
-    var files: [@import("folder.zig").entries_max][]const u8 = undefined;
-    var count: u32 = 0;
-    const arguments = args[@min(args.len, 1)..];
-    for (arguments[0..@min(arguments.len, files.len)]) |arg| {
-        if (std.mem.startsWith(u8, arg, "--")) continue;
-        if (count == files.len) break;
-        files[count] = arg;
-        count += 1;
-    }
     state.open_paths(files[0..count]);
     try app.run();
 }
