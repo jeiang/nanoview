@@ -17,6 +17,7 @@ test {
     _ = @import("sort_order.zig");
     _ = @import("explorer_sort.zig");
     _ = @import("actions.zig");
+    _ = @import("webp.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the

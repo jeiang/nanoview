@@ -1,5 +1,56 @@
 const std = @import("std");
 
+/// libwebp's decoder and demux sources only; vendor/libwebp/src/webp/config.h leaves every
+/// WEBP_HAVE_* SIMD switch off, so all targets use the same portable C path.
+const webp_sources = [_][]const u8{
+    "dec/alpha_dec.c",
+    "dec/buffer_dec.c",
+    "dec/frame_dec.c",
+    "dec/idec_dec.c",
+    "dec/io_dec.c",
+    "dec/quant_dec.c",
+    "dec/tree_dec.c",
+    "dec/vp8_dec.c",
+    "dec/vp8l_dec.c",
+    "dec/webp_dec.c",
+    "demux/demux.c",
+    "dsp/alpha_processing.c",
+    "dsp/cpu.c",
+    "dsp/dec.c",
+    "dsp/dec_clip_tables.c",
+    "dsp/filters.c",
+    "dsp/lossless.c",
+    "dsp/rescaler.c",
+    "dsp/upsampling.c",
+    "dsp/yuv.c",
+    "utils/bit_reader_utils.c",
+    "utils/color_cache_utils.c",
+    "utils/filters_utils.c",
+    "utils/huffman_utils.c",
+    "utils/palette.c",
+    "utils/quant_levels_dec_utils.c",
+    "utils/rescaler_utils.c",
+    "utils/random_utils.c",
+    "utils/thread_utils.c",
+    "utils/utils.c",
+};
+
+/// Compiles the bundled C decoders into a module. Zig's default UBSan traps are off for
+/// upstream C: upstream does not test with them, and a trap would abort the viewer.
+fn add_decoders(b: *std.Build, module: *std.Build.Module) void {
+    module.link_libc = true;
+    module.addIncludePath(b.path("vendor/libwebp"));
+    module.addCSourceFile(.{
+        .file = b.path("src/webp_bridge.c"),
+        .flags = &.{ "-DHAVE_CONFIG_H", "-fno-sanitize=undefined" },
+    });
+    module.addCSourceFiles(.{
+        .root = b.path("vendor/libwebp/src"),
+        .files = &webp_sources,
+        .flags = &.{ "-DHAVE_CONFIG_H", "-fno-sanitize=undefined" },
+    });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -15,6 +66,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "nanoui", .module = nanoui }},
         }),
     });
+    // The app does not call the wrappers yet; unreferenced decoder code is dropped at link.
+    add_decoders(b, exe.root_module);
     if (target.result.os.tag == .windows) {
         exe.subsystem = .windows;
         // The resource is Explorer's icon; main.zig hands the same file to the window.
@@ -79,5 +132,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "nanoui", .module = nanoui }},
         }),
     });
+    add_decoders(b, tests.root_module);
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
 }
