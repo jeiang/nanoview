@@ -118,7 +118,8 @@ fn onLeave(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
 
 fn onScroll(controller: *anyopaque, dx: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
     const event = gtk.v4api.gtk_event_controller_get_current_event(controller);
-    const precise = if (event) |e| gtk.v4api.gdk_scroll_event_get_direction(e) == 4 else false;
+    const device = if (event) |e| gtk.v4api.gdk_event_get_device(e) else null;
+    const precise = if (device) |d| gtk.v4api.gdk_device_get_source(d) == 4 else false;
     const unit: f64 = if (precise) 40 else 48;
     surface.scrollAxes(of(data), @floatCast(-dx * unit), @floatCast(-dy * unit), precise);
     return 1;

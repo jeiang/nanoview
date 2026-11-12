@@ -90,6 +90,8 @@ pub const Api = struct {
 /// clipboard and dialogs that wait.
 pub const Api3 = struct {
     gtk_gesture_zoom_new: *const fn (widget: *Widget) callconv(.c) *anyopaque,
+    gdk_event_get_source_device: *const fn (e: *Event) callconv(.c) ?*anyopaque,
+    gdk_device_get_source: *const fn (device: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn (argc: ?*c_int, argv: ?*anyopaque) callconv(.c) c_int,
     gtk_main: *const fn () callconv(.c) void,
     gtk_main_quit: *const fn () callconv(.c) void,
@@ -151,7 +153,8 @@ pub const Api4 = struct {
     gtk_gesture_zoom_new: *const fn () callconv(.c) *anyopaque,
     gtk_gesture_single_get_current_button: *const fn (gesture: *anyopaque) callconv(.c) c_uint,
     gtk_event_controller_get_current_event: *const fn (controller: *anyopaque) callconv(.c) ?*anyopaque,
-    gdk_scroll_event_get_direction: *const fn (event: *anyopaque) callconv(.c) c_int,
+    gdk_event_get_device: *const fn (event: *anyopaque) callconv(.c) ?*anyopaque,
+    gdk_device_get_source: *const fn (device: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn () callconv(.c) c_int,
     gtk_window_new: *const fn () callconv(.c) *Widget,
     gtk_window_set_child: *const fn (w: *Widget, child: ?*Widget) callconv(.c) void,

@@ -445,7 +445,9 @@ fn onScroll(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int
     var dx: f64 = 0;
     var dy: f64 = 0;
     if (gtk.v3.gdk_event_get_scroll_deltas(e, &dx, &dy) != 0) {
-        scrollAxes(s, @floatCast(-dx * 40), @floatCast(-dy * 40), true);
+        const device = gtk.v3.gdk_event_get_source_device(e);
+        const precise = if (device) |d| gtk.v3.gdk_device_get_source(d) == 6 else false;
+        scrollAxes(s, @floatCast(-dx * 40), @floatCast(-dy * 40), precise);
     } else {
         var dir: c_int = 0;
         _ = gtk.v3.gdk_event_get_scroll_direction(e, &dir);
