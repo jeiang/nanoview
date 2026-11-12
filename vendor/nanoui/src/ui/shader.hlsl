@@ -393,7 +393,16 @@ float4 shade(Varyings v) {
     float coverage = 1.0 - smoothstep(-aa, aa, d);
     if (kind == 3.0) {
         // Premultiplied already: scaled by the corners' coverage and opacity.
-        float4 px = images.SampleLevel(sampler_images, v.v_uv, 0);
+        float4 px;
+        if (v.i_misc.y > 0.5) {
+            uint width, height;
+            images.GetDimensions(width, height);
+            int2 size = int2(width, height);
+            int2 at = clamp(int2(floor(v.v_uv * float2(size))), int2(0, 0), size - int2(1, 1));
+            px = images.Load(int3(at, 0));
+        } else {
+            px = images.SampleLevel(sampler_images, v.v_uv, 0);
+        }
         // Tinted: the picture's shape in one color (a mark following the theme).
         if (v.i_border_color.a > 0.0) {
             float a = px.a * v.i_border_color.a * coverage * v.i_color.a;

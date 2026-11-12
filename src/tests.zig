@@ -367,3 +367,73 @@ test "trash confirmation cancels and Enter accepts without touching system trash
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.enter });
     try testing.expect(f.tester.containsText("Could not move a.png to the Trash"));
 }
+test "mirror and flip are view only and reset with the next picture" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 20, 10);
+    try f.write_png("b.png", 20, 10);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = 'm' });
+    try testing.expect(f.state.viewport.mirror);
+    try testing.expect(f.tester.containsText("Mirror: on"));
+    _ = f.tester.shortcut(.{ .key = 'v' });
+    _ = f.tester.shortcut(.{ .key = 'r' });
+    try testing.expect(f.state.viewport.mirror and f.state.viewport.flip);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expect(!f.state.viewport.mirror and !f.state.viewport.flip);
+}
+
+test "w cycles fit modes and zero restores the selected fit" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 1000, 200);
+    try f.open("a.png");
+    const FitMode = @import("settings.zig").FitMode;
+    for ([_]FitMode{ .width, .height, .fill, .whole }) |mode| {
+        _ = f.tester.shortcut(.{ .key = 'w' });
+        try testing.expectEqual(mode, f.state.settings.fit_mode);
+        try testing.expectEqual(mode, f.state.viewport.fit_mode);
+        try testing.expect(f.state.viewport.fit);
+    }
+    _ = f.tester.shortcut(.{ .key = '-' });
+    try testing.expect(!f.state.viewport.fit);
+    _ = f.tester.shortcut(.{ .key = '0' });
+    try testing.expect(f.state.viewport.fit);
+}
+
+test "zoom lock keeps scale and relative position on the next picture" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 1000, 800);
+    try f.write_png("b.png", 1200, 1000);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = '1' });
+    f.state.viewport.pan(-100, -80);
+    const old = f.state.viewport;
+    _ = f.tester.shortcut(.{ .key = 'z' });
+    try testing.expect(f.tester.containsText("Zoom lock: on"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    const vp = f.state.viewport;
+    try testing.expectApproxEqAbs(old.scale, vp.scale, 0.0001);
+    const old_center = (240 - old.x) / (old.image_w * old.scale);
+    const new_center = (240 - vp.x) / (vp.image_w * vp.scale);
+    try testing.expectApproxEqAbs(old_center, new_center, 0.0001);
+    try testing.expect(!vp.fit);
+}
+
+test "zoom keys use the configured percentage and options notify" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 1000, 800);
+    try f.open("a.png");
+    f.state.settings.zoom_step_percent = 50;
+    const old = f.state.viewport.scale;
+    _ = f.tester.shortcut(.{ .key = '=' });
+    try testing.expectApproxEqAbs(old * 1.5, f.state.viewport.scale, 0.0001);
+    for ([_]u8{ 'p', 'b', 'u' }, [_][]const u8{
+        "Smooth: off", "Checkerboard: on", "Fit upscale: on",
+    }) |key, message| {
+        _ = f.tester.shortcut(.{ .key = key });
+        try testing.expect(f.tester.containsText(message));
+    }
+}

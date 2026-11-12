@@ -68,6 +68,8 @@ pub const State = struct {
     viewport_generation: u32 = 0, // generation the viewport was made for
     base: orientation.Upright = .{ .raw_w = 1, .raw_h = 1, .turns = 0 },
     turns_user: u2 = 0,
+    mirror: bool = false,
+    flip: bool = false,
     info_shown: bool = false,
     drag_last: ?ui.Point = null,
     message_buf: [message_len_max]u8 = undefined,
@@ -251,6 +253,8 @@ pub const State = struct {
         assert(s.path_len > 0);
         s.generation +%= 1;
         s.turns_user = 0;
+        s.mirror = false;
+        s.flip = false;
         s.drag_last = null;
         s.promote_failed = false;
         s.slideshow_at = null;

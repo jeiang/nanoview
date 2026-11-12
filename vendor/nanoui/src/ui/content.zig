@@ -29,9 +29,12 @@ pub const Content = union(enum) {
     /// A picture: its key in the image atlas, and where its pixels come from
     /// the first time it is drawn.
     pub const Image = struct {
+        pub const Sampling = enum { linear, nearest };
+
         key: u64,
         source: @import("images.zig").Source,
         opacity: f32 = 1,
+        sampling: Sampling = .linear,
         /// Its shape (alpha) filled with this color: a monochrome mark.
         tint: ?types.Color = null,
         /// Drawn on whole pixels: a picture made at the screen's own

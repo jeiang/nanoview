@@ -60,6 +60,7 @@ pub const Kind = struct {
     pub const text: f32 = 1;
     pub const shadow: f32 = 2;
     /// A picture from the image atlas (`images.zig`), its corners rounded.
+    /// `border_width` selects sampling: 0 linear, 1 nearest.
     pub const image: f32 = 3;
     /// A pane of Liquid Glass over what was drawn before it (`glass.zig`):
     /// `color` its tint, `uv` its bezel, refraction, opacity and rim width,

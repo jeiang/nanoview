@@ -81,8 +81,8 @@ fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @imp
 /// The pixels a picture needs along its longest side: only part of it in
 /// the box means the whole of it larger, to stay as sharp.
 fn imageSide(im: ctx_mod.Content.Image, rect: [4]f32, scale: f32) u32 {
-    const w = rect[2] / @max(im.part[2] - im.part[0], 0.01);
-    const h = rect[3] / @max(im.part[3] - im.part[1], 0.01);
+    const w = rect[2] / @max(@abs(im.part[2] - im.part[0]), 0.01);
+    const h = rect[3] / @max(@abs(im.part[3] - im.part[1]), 0.01);
     return @intFromFloat(@max(1, @min(1e6, @ceil(@max(w, h) * scale))));
 }
 
@@ -200,6 +200,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
                 .border_color = if (im.tint) |t| metal.color4(t) else .{ 0, 0, 0, 0 },
                 .uv = partOf(e.uv, im.part),
                 .radius = rad,
+                .border_width = if (im.sampling == .nearest) 1 else 0,
                 .kind = metal.Kind.image,
                 .clip = clip4,
             }),
