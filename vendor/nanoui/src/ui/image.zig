@@ -43,6 +43,62 @@ extern "c" fn CGImageGetWidth(img: CGImageRef) usize;
 extern "c" fn CGImageGetHeight(img: CGImageRef) usize;
 extern "c" fn CGContextDrawImage(ctx: cf.CGContextRef, rect: @import("../objc.zig").CGRect, image: CGImageRef) void;
 extern "c" fn CGContextSetInterpolationQuality(ctx: cf.CGContextRef, quality: c_int) void;
+extern "c" fn CGImageSourceGetType(src: CGImageSourceRef) ?cf.CFStringRef;
+extern "c" fn CFEqual(a: *const anyopaque, b: *const anyopaque) bool;
+extern "c" const kCGImageSourceTypeIdentifierHint: cf.CFStringRef;
+
+/// Camera RAW types built on TIFF that ImageIO takes for a plain TIFF unless told.
+const tiff_raw_types = [_][]const u8{
+    "com.sony.arw-raw-image",  "com.sony.sr2-raw-image",       "com.sony.raw-image",
+    "com.nikon.raw-image",     "com.nikon.nrw-raw-image",      "com.pentax.raw-image",
+    "com.epson.raw-image",     "com.hasselblad.fff-raw-image",
+};
+
+/// An image source for `data`. ImageIO reads many camera RAW files (NEF, ARW, PEF, …)
+/// as a plain TIFF and finds a small preview or nothing; told the camera's type it
+/// reads the full picture. So a TIFF is also opened as each RAW type built on TIFF,
+/// and the source with the largest picture is kept.
+fn createSource(data: CFDataRef) ?CGImageSourceRef {
+    const plain = CGImageSourceCreateWithData(data, null) orelse return null;
+    const kind = CGImageSourceGetType(plain) orelse return plain;
+    const tiff = cf.string("public.tiff");
+    defer cf.CFRelease(tiff);
+    if (!CFEqual(kind, tiff)) return plain;
+    var best = plain;
+    var best_area = area(plain);
+    for (tiff_raw_types) |name| {
+        const hinted = hintedSource(data, name) orelse continue;
+        const a = area(hinted);
+        if (a > best_area) {
+            cf.CFRelease(best);
+            best = hinted;
+            best_area = a;
+        } else cf.CFRelease(hinted);
+    }
+    return best;
+}
+
+fn hintedSource(data: CFDataRef, type_name: []const u8) ?CGImageSourceRef {
+    const name = cf.string(type_name);
+    defer cf.CFRelease(name);
+    const keys = [_]?*const anyopaque{kCGImageSourceTypeIdentifierHint};
+    const values = [_]?*const anyopaque{name};
+    const opts = cf.CFDictionaryCreate(null, &keys, &values, 1, &cf.kCFTypeDictionaryKeyCallBacks, &cf.kCFTypeDictionaryValueCallBacks) orelse return null;
+    defer cf.CFRelease(opts);
+    return CGImageSourceCreateWithData(data, @ptrCast(opts));
+}
+
+/// The pixel count of the first picture's header size, 0 without one.
+fn area(src: CGImageSourceRef) u64 {
+    const props = CGImageSourceCopyPropertiesAtIndex(src, 0, null) orelse return 0;
+    defer cf.CFRelease(props);
+    var width: i32 = 0;
+    var height: i32 = 0;
+    if (CFDictionaryGetValue(props, kCGImagePropertyPixelWidth)) |n| _ = CFNumberGetValue(n, 3, &width);
+    if (CFDictionaryGetValue(props, kCGImagePropertyPixelHeight)) |n| _ = CFNumberGetValue(n, 3, &height);
+    if (width <= 0 or height <= 0) return 0;
+    return @as(u64, @intCast(width)) * @as(u64, @intCast(height));
+}
 
 pub const Decoded = struct { width: u32, height: u32, bgra: []u8 };
 
@@ -50,7 +106,7 @@ pub const Decoded = struct { width: u32, height: u32, bgra: []u8 };
 pub fn decode(gpa: std.mem.Allocator, bytes: []const u8) !Decoded {
     const data = CFDataCreate(null, bytes.ptr, @intCast(bytes.len)) orelse return error.Data;
     defer cf.CFRelease(data);
-    const src = CGImageSourceCreateWithData(data, null) orelse return error.NotImage;
+    const src = createSource(data) orelse return error.NotImage;
     defer cf.CFRelease(src);
     const img = CGImageSourceCreateImageAtIndex(src, 0, null) orelse return error.NotImage;
     defer CGImageRelease(img);
@@ -86,7 +142,7 @@ pub const Dimensions = struct { width: u32, height: u32 };
 pub fn dimensions(bytes: []const u8) ?Dimensions {
     const data = CFDataCreate(null, bytes.ptr, @intCast(bytes.len)) orelse return null;
     defer cf.CFRelease(data);
-    const src = CGImageSourceCreateWithData(data, null) orelse return null;
+    const src = createSource(data) orelse return null;
     defer cf.CFRelease(src);
     var width: i32 = 0;
     var height: i32 = 0;
@@ -110,7 +166,7 @@ pub fn dimensions(bytes: []const u8) ?Dimensions {
 pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitted {
     const data = CFDataCreate(null, bytes.ptr, @intCast(bytes.len)) orelse return error.Data;
     defer cf.CFRelease(data);
-    const src = CGImageSourceCreateWithData(data, null) orelse return error.NotImage;
+    const src = createSource(data) orelse return error.NotImage;
     defer cf.CFRelease(src);
     // Its own size, from its header.
     var width: i32 = 0;
