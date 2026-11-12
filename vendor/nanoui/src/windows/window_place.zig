@@ -144,8 +144,9 @@ pub fn save(self: *Window) void {
     const h = self.hwnd orelse return;
     var path_buf: [1024]u8 = undefined;
     const path = filePath(self, &path_buf) orelse return;
-    var p: WINDOWPLACEMENT = .{};
-    if (GetWindowPlacement(h, &p) == 0) return;
+    // Full screen's frame is the monitor: keep the one it will restore.
+    var p: WINDOWPLACEMENT = self.fullscreen_placement;
+    if (!self.full_screen and GetWindowPlacement(h, &p) == 0) return;
     var line: [96]u8 = undefined;
     const text = encode(&line, p) catch return;
     std.Io.Dir.cwd().writeFile(self.app.io, .{ .sub_path = path, .data = text }) catch |e| {
