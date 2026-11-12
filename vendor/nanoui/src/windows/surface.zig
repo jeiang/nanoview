@@ -483,6 +483,13 @@ pub const Surface = struct {
                 self.ctx.pointerUp();
                 self.frame();
             },
+            // WM_RBUTTONDOWN / WM_RBUTTONDBLCLK: the secondary press that
+            // opens a context menu, as GTK's button 3 has it.
+            0x0204, 0x0206 => {
+                self.setMouse(lp);
+                self.ctx.secondaryDown();
+                self.frame();
+            },
             // WM_XBUTTONDOWN / WM_XBUTTONUP / WM_XBUTTONDBLCLK (CS_DBLCLKS).
             0x020B, 0x020C, 0x020D => {
                 self.setMouse(lp);
