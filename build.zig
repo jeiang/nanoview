@@ -39,6 +39,12 @@ const webp_sources = [_][]const u8{
 /// upstream C: upstream does not test with them, and a trap would abort the viewer.
 fn add_decoders(b: *std.Build, module: *std.Build.Module) void {
     module.link_libc = true;
+    // wuffs_bridge.c sets the Wuffs implementation and module macros itself.
+    module.addIncludePath(b.path("vendor/wuffs"));
+    module.addCSourceFile(.{
+        .file = b.path("src/wuffs_bridge.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
+    });
     module.addIncludePath(b.path("vendor/libwebp"));
     module.addCSourceFile(.{
         .file = b.path("src/webp_bridge.c"),
