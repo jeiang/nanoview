@@ -29,6 +29,7 @@ const changed_mode: i32 = @bitCast(@as(u32, 0x80010106));
 const bytes_per_pixel: u32 = 4;
 const flip_horizontal: u32 = 8;
 const interpolation_fant: u32 = 3;
+const cache_on_load: u32 = 2; // WICBitmapCacheOnLoad
 
 // Layout and vtable slots follow wincodec.h; all interfaces begin with IUnknown.
 const Com = extern struct {
@@ -147,25 +148,49 @@ fn decode_frame(
         else => 0,
     };
     const mirrored = exif == 2 or exif == 4 or exif == 5 or exif == 7;
-    // Separate rotation and reflection stages make the composition explicit:
-    // rotate clockwise first, then reflect horizontally in upright coordinates.
-    const rotated = if (turns != 0) try transform(factory, frame, turns) else null;
-    defer if (rotated) |source| source.release();
-    const flipped = if (mirrored)
-        try transform(factory, rotated orelse frame, flip_horizontal)
-    else
-        null;
-    defer if (flipped) |source| source.release();
-    const source = flipped orelse rotated orelse frame;
+    // Scale at the frame's stored orientation first: the flip-rotator reads
+    // pixel by pixel, which is quadratic over a scanline codec, so it only
+    // runs on a buffered bitmap of the fitted size.
     const scaler = try create(factory, 11);
     defer scaler.release();
     const scale = scaler.slot(
         *const fn (*Com, *Com, u32, u32, u32) callconv(winapi) i32,
         8,
     );
-    try check(scale(scaler, source, size.width, size.height, interpolation_fant));
-    try copy_pixels(factory, scaler, out[0..@intCast(byte_count)], size.width);
+    const stored_w = if (swapped) size.height else size.width;
+    const stored_h = if (swapped) size.width else size.height;
+    try check(scale(scaler, frame, stored_w, stored_h, interpolation_fant));
+    if (turns == 0 and !mirrored) {
+        try copy_pixels(factory, scaler, out[0..@intCast(byte_count)], size.width);
+        return size;
+    }
+    const buffered = try buffer(factory, scaler);
+    defer buffered.release();
+    // Rotate clockwise first, then reflect horizontally in upright coordinates.
+    const rotated = if (turns != 0) try transform(factory, buffered, turns) else null;
+    defer if (rotated) |source| source.release();
+    const flipped = if (mirrored)
+        try transform(factory, rotated orelse buffered, flip_horizontal)
+    else
+        null;
+    defer if (flipped) |source| source.release();
+    const source = flipped orelse rotated orelse buffered;
+    try copy_pixels(factory, source, out[0..@intCast(byte_count)], size.width);
     return size;
+}
+
+/// IWICImagingFactory::CreateBitmapFromSource (slot 18) with
+/// WICBitmapCacheOnLoad: the scaled pixels are decoded once, into WIC memory.
+fn buffer(factory: *Com, source: *Com) !*Com {
+    var raw: ?*Com = null;
+    const create_bitmap = factory.slot(
+        *const fn (*Com, *Com, u32, *?*Com) callconv(winapi) i32,
+        18,
+    );
+    try check(create_bitmap(factory, source, cache_on_load, &raw));
+    const bitmap = raw orelse return error.WicDecodeFailed;
+    assert(@intFromPtr(bitmap) != 0);
+    return bitmap;
 }
 
 fn copy_pixels(factory: *Com, source: *Com, out: []u8, width: u32) !void {
