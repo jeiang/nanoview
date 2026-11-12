@@ -357,6 +357,9 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
     var button: c_uint = 0;
     _ = gtk.v3.gdk_event_get_button(e, &button);
     if (button == 8 or button == 9) {
+        // GTK 3 adds a 2/3-button press after the individual presses.
+        const kind = gtk.v3.gdk_event_get_event_type(e);
+        if (kind == gtk.double_press or kind == gtk.triple_press) return 1;
         s.setMouse(e);
         s.ctx.input.button = if (button == 8) .back else .forward;
         s.ctx.updateHot();
