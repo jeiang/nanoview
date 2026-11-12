@@ -58,6 +58,8 @@ pub const Surface = struct {
     ticking: bool = false,
     frame_posted: bool = false,
     tracking: bool = false,
+    /// The current wheel gesture's precision and its last event's time.
+    wheel: WheelGesture = .{},
     theme_override: ?Theme = null,
     /// The system's appearance as last read: a window that names no theme of
     /// its own follows it, and `WM_SETTINGCHANGE` says when it changed.
@@ -355,6 +357,11 @@ pub const Surface = struct {
                 // another DPI: the system suggests a rect that keeps its
                 // physical size, and WM_SIZE from that reads the new scale.
                 const r: *const w.RECT = @ptrFromInt(@as(usize, @bitCast(lp)));
+                // Full screen stays the whole monitor, not the suggested rect.
+                if (self.window.full_screen) if (@import("window_place.zig").monitor(self.window)) |m| {
+                    _ = w.SetWindowPos(h, null, m.whole.left, m.whole.top, m.whole.right - m.whole.left, m.whole.bottom - m.whole.top, w.SWP_NOZORDER | w.SWP_NOACTIVATE | 0x0020);
+                    return 0;
+                };
                 _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
                 return 0;
             },
@@ -476,11 +483,12 @@ pub const Surface = struct {
                 self.ctx.pointerUp();
                 self.frame();
             },
-            0x020B, 0x020C => { // WM_XBUTTONDOWN / WM_XBUTTONUP
+            // WM_XBUTTONDOWN / WM_XBUTTONUP / WM_XBUTTONDBLCLK (CS_DBLCLKS).
+            0x020B, 0x020C, 0x020D => {
                 self.setMouse(lp);
                 self.ctx.input.button = if ((wp >> 16) & 0xffff == 1) .back else .forward;
                 self.ctx.updateHot();
-                if (msg == 0x020B) {
+                if (msg != 0x020C) {
                     _ = w.SetCapture(h);
                     self.ctx.pointerDown();
                 } else {
@@ -495,13 +503,14 @@ pub const Surface = struct {
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
-                if (wp & 0x0008 != 0) {
-                    // Windows synthesizes Ctrl+wheel for touchpad pinch.
+                if (wp & 0x0008 != 0 and self.ctx.wants_wheel) {
+                    // Windows synthesizes Ctrl+wheel for touchpad pinch; a view
+                    // that takes the wheel gets it as zoom, others still scroll.
                     self.ctx.input.zoom *= @exp(@as(f32, @floatFromInt(raw)) / 600);
                     pace_side.onInput(self);
                     return 0;
                 }
-                self.ctx.input.precise = preciseWheel(raw);
+                self.ctx.input.precise = self.wheel.classify(clock.now(), raw);
                 const delta = @as(f32, @floatFromInt(raw)) * 0.4;
                 // Turns between two refreshes are one frame: a scroll box's
                 // offset moves at once, a view's wheel adds up until built.
@@ -520,7 +529,7 @@ pub const Surface = struct {
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const raw: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
-                self.ctx.input.precise = preciseWheel(raw);
+                self.ctx.input.precise = self.wheel.classify(clock.now(), raw);
                 // Match the finger/content direction of vertical scrolling.
                 self.ctx.input.scroll.x -= @as(f32, @floatFromInt(raw)) * 0.4;
                 pace_side.onInput(self);
@@ -554,16 +563,33 @@ pub const Surface = struct {
     }
 };
 
-fn preciseWheel(delta: i16) bool {
-    return @rem(delta, 120) != 0;
-}
+/// Precision touchpads send wheel deltas that are not multiples of
+/// WHEEL_DELTA (120). One such event marks the gesture precise until the
+/// wheel rests for `rest`, so a touchpad event that happens to be a
+/// multiple of 120 does not turn into a wheel step mid-gesture.
+const WheelGesture = struct {
+    precise: bool = false,
+    last: f64 = -std.math.inf(f64),
 
-test "fractional wheel deltas identify precision scrolling" {
-    try std.testing.expect(preciseWheel(1));
-    try std.testing.expect(preciseWheel(-119));
-    try std.testing.expect(!preciseWheel(120));
-    try std.testing.expect(!preciseWheel(-240));
-    try std.testing.expect(!preciseWheel(0));
+    const rest: f64 = 0.1;
+
+    fn classify(g: *WheelGesture, now: f64, delta: i16) bool {
+        if (now - g.last > rest) g.precise = false;
+        g.last = now;
+        if (@rem(delta, 120) != 0) g.precise = true;
+        return g.precise;
+    }
+};
+
+test "wheel precision holds for a gesture and resets after a rest" {
+    var g: WheelGesture = .{};
+    try std.testing.expect(!g.classify(0, 120));
+    try std.testing.expect(!g.classify(0.05, -240));
+    try std.testing.expect(g.classify(0.1, 17));
+    try std.testing.expect(g.classify(0.15, 120));
+    try std.testing.expect(g.classify(0.2, 0));
+    try std.testing.expect(!g.classify(0.5, 120));
+    try std.testing.expect(g.classify(1.0, -119));
 }
 
 /// Whether the environment variable `name` is set to something but "0":

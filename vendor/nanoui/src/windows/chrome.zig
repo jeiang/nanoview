@@ -149,7 +149,9 @@ pub fn handle(win: *Window, hwnd: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) 
             const original_top = params.rgrc[0].top;
             const def = w.DefWindowProcW(hwnd, msg, wp, lp);
             if (def != 0) return def;
-            params.rgrc[0].top = reclaimedTop(original_top, w.IsZoomed(hwnd) != 0, frameTop(w.GetDpiForWindow(hwnd)));
+            // Full screen entered from maximized keeps WS_MAXIMIZE but no frame overhang.
+            const zoomed = w.IsZoomed(hwnd) != 0 and !win.full_screen;
+            params.rgrc[0].top = reclaimedTop(original_top, zoomed, frameTop(w.GetDpiForWindow(hwnd)));
             return 0;
         },
         // lParam -1 is WM_NCACTIVATE's "do not repaint the non-client area".

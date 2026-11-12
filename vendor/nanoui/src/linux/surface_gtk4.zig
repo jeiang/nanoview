@@ -117,12 +117,29 @@ fn onLeave(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
 }
 
 fn onScroll(controller: *anyopaque, dx: f64, dy: f64, data: ?*anyopaque) callconv(.c) c_int {
-    const event = gtk.v4api.gtk_event_controller_get_current_event(controller);
-    const device = if (event) |e| gtk.v4api.gdk_event_get_device(e) else null;
-    const precise = if (device) |d| gtk.v4api.gdk_device_get_source(d) == 4 else false;
-    const unit: f64 = if (precise) 40 else 48;
-    surface.scrollAxes(of(data), @floatCast(-dx * unit), @floatCast(-dy * unit), precise);
+    const unit: ?c_int = if (gtk.scroll_get_unit) |f| f(controller) else null;
+    const m = scrollMapping(unit, dx, dy);
+    surface.scrollAxes(of(data), @floatCast(-dx * m.factor), @floatCast(-dy * m.factor), m.precise);
     return 1;
+}
+
+const ScrollMapping = struct { precise: bool, factor: f64 };
+
+/// GDK_SCROLL_UNIT_SURFACE (1) is a touchpad's pixels on Wayland. Wheel
+/// units (0, or unknown before GTK 4.8) with a fraction are smooth
+/// (an X11 touchpad, whose device is the logical pointer); whole steps a wheel.
+fn scrollMapping(unit: ?c_int, dx: f64, dy: f64) ScrollMapping {
+    if (unit == 1) return .{ .precise = true, .factor = 1 };
+    const smooth = dx != @trunc(dx) or dy != @trunc(dy);
+    return if (smooth) .{ .precise = true, .factor = 40 } else .{ .precise = false, .factor = 48 };
+}
+
+test "GTK 4 scroll units pick precise pixel or wheel steps" {
+    try std.testing.expectEqual(ScrollMapping{ .precise = true, .factor = 1 }, scrollMapping(1, 0, 3));
+    try std.testing.expectEqual(ScrollMapping{ .precise = true, .factor = 40 }, scrollMapping(0, 0, 0.25));
+    try std.testing.expectEqual(ScrollMapping{ .precise = true, .factor = 40 }, scrollMapping(null, -0.5, 0));
+    try std.testing.expectEqual(ScrollMapping{ .precise = false, .factor = 48 }, scrollMapping(0, 0, -1));
+    try std.testing.expectEqual(ScrollMapping{ .precise = false, .factor = 48 }, scrollMapping(null, 1, 0));
 }
 
 fn onKey(_: *anyopaque, keyval: c_uint, _: c_uint, state: c_uint, data: ?*anyopaque) callconv(.c) c_int {

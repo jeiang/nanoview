@@ -152,9 +152,6 @@ pub const Api3 = struct {
 pub const Api4 = struct {
     gtk_gesture_zoom_new: *const fn () callconv(.c) *anyopaque,
     gtk_gesture_single_get_current_button: *const fn (gesture: *anyopaque) callconv(.c) c_uint,
-    gtk_event_controller_get_current_event: *const fn (controller: *anyopaque) callconv(.c) ?*anyopaque,
-    gdk_event_get_device: *const fn (event: *anyopaque) callconv(.c) ?*anyopaque,
-    gdk_device_get_source: *const fn (device: *anyopaque) callconv(.c) c_int,
     gtk_init_check: *const fn () callconv(.c) c_int,
     gtk_window_new: *const fn () callconv(.c) *Widget,
     gtk_window_set_child: *const fn (w: *Widget, child: ?*Widget) callconv(.c) void,
@@ -272,6 +269,8 @@ pub const SList = extern struct { data: ?*anyopaque, next: ?*SList };
 pub var api: Api = undefined;
 pub var v3: Api3 = undefined;
 pub var v4api: Api4 = undefined;
+/// `gtk_event_controller_scroll_get_unit` (GTK 4.8+); null on older GTK 4.
+pub var scroll_get_unit: ?*const fn (controller: *anyopaque) callconv(.c) c_int = null;
 /// GTK 4 is loaded (else GTK 3).
 pub var v4 = false;
 /// Only GTK 3 will do: the WebKitGTK a page needs is built for it.
@@ -305,6 +304,7 @@ pub fn load() bool {
         if (wants_layer_shell) _ = layerShellLib();
         if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
             if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
+                if (std.c.dlsym(lib, "gtk_event_controller_scroll_get_unit")) |sym| scroll_get_unit = @ptrCast(@alignCast(sym));
                 v4 = true;
                 loaded = true;
                 return true;

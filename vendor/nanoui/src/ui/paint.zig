@@ -322,8 +322,9 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
             @min(outer[2], ax + (i.clip[2] - ax) * s), @min(outer[3], ay + (i.clip[3] - ay) * s),
         };
         i.radius *= s;
-        // A border's width, a shadow's blur, a pane's backdrop blur.
-        i.border_width *= s;
+        // A border's width, a shadow's blur, a pane's backdrop blur; an
+        // image's sampling flag and a texture's slot are not lengths.
+        if (i.kind != metal.Kind.image and i.kind != metal.Kind.texture) i.border_width *= s;
         if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, i.uv[2] * s, 0 };
         const round = metal.clipCorners(i.clip_round);
         if (round.corners != 0) i.clip_round = metal.clipRound(round.radius * s, round.corners);
