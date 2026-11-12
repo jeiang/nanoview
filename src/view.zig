@@ -90,7 +90,7 @@ fn message(s: *State, c: *ui.Context) void {
         return;
     }
     c.frameIn(@floatCast(left));
-    const box = ui.div(c).absolute().offset(12, c.size.h - 72).px(8).py(4).rounded(6)
+    const box = ui.div(c).absolute().offset(12, c.size.h - 92).px(8).py(4).rounded(6)
         .bg(ui.Color.black.alpha(0.6));
     defer box.end();
     ui.text(c, s.message(), .{ .size = info_text_size, .color = ui.Color.white });
