@@ -18,6 +18,10 @@ const recent_mod = @import("recent.zig");
 const fileops = @import("fileops.zig");
 const sniff = @import("sniff.zig");
 const exif = @import("exif.zig");
+const animation = @import("animation.zig");
+const playback = @import("playback.zig");
+const pages = @import("pages.zig");
+const png_save = @import("png_save.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -88,7 +92,7 @@ pub const Source = union(enum) {
 pub const State = struct {
     settings: settings_mod.Settings = .{},
     io: std.Io,
-    gpa: std.mem.Allocator, // only for nanoui's dialog and clipboard results, freed at once
+    gpa: std.mem.Allocator, // only for nanoui's panel and clipboard results, freed at once
     file_buffer: []u8, // file_size_max bytes, allocated once in main
     current_pixels: []u8, // current_pixels_max bytes, allocated once at startup
     source: Source = .none,
@@ -140,6 +144,10 @@ pub const State = struct {
     rename_buffer: ui.TextBuffer = .{},
     trashed: fileops.TrashStack = .{},
     clipboard: Clipboard = .{},
+    player: animation.Player = .{},
+    page: u32 = 0, // of a multi-page file; nonzero pages decode into `current_pixels`
+    page_count: u32 = 1,
+    png: png_save.Encoder = undefined, // save frame as PNG
 
     /// The buffers are allocated once by the caller and never freed while
     /// the state lives.
@@ -151,9 +159,11 @@ pub const State = struct {
         pool: []u8,
         scratch: []u8,
         current_pixels: []u8,
+        animation_memory: []u8,
     ) void {
         assert(file_buffer.len == file_size_max);
         assert(current_pixels.len == current_pixels_max);
+        assert(animation_memory.len == animation.memory_bytes);
         folder_mod.init_extensions();
         s.* = .{
             .io = io,
@@ -161,6 +171,7 @@ pub const State = struct {
             .file_buffer = file_buffer,
             .current_pixels = current_pixels,
             .keymap = .defaults(),
+            .player = .{ .memory = animation_memory },
         };
         s.rename_buffer = .initFixed(&s.rename_storage);
         s.preload.init(io, &s.folder, pool, scratch);
@@ -365,6 +376,7 @@ pub const State = struct {
     }
 
     fn fail(s: *State) void {
+        s.player.stop();
         s.generation +%= 1;
         s.source = .none;
         s.status = .failed;
@@ -385,6 +397,7 @@ pub const State = struct {
 
     /// What every newly shown picture starts from.
     fn begin_picture(s: *State) void {
+        s.player.stop();
         s.generation +%= 1;
         s.turns_user = 0;
         s.mirror = false;
@@ -394,6 +407,8 @@ pub const State = struct {
         s.promoted = false;
         s.slideshow_at = null;
         s.rename_open = false;
+        s.page = 0;
+        s.page_count = 1;
     }
 
     pub fn load(s: *State) void {
@@ -403,12 +418,16 @@ pub const State = struct {
         if (s.details_shown) s.details.load(s.io, s.path());
         // Without an index nothing preloads: `current` stays null.
         const slot = if (s.index) |i| s.preload.take(i) else null;
-        if (slot) |n| {
-            s.source = s.slot_source(n);
+        // An animation plays from the file's bytes, which the slot does not keep.
+        const animated = if (slot) |n| s.preload.slots[n].animated else false;
+        if (slot != null and !(animated and s.settings.animation)) {
+            s.source = s.slot_source(slot.?);
+            s.page_count = s.preload.slots[slot.?].page_count;
             s.status = .shown;
         } else {
             s.read_current();
         }
+        pages.opened(s);
         // The view sets the title on its next frame.
         if (s.window) |w| w.redraw();
         assert(s.status != .empty);
@@ -432,6 +451,10 @@ pub const State = struct {
     fn read_current(s: *State) void {
         assert(s.path_len > 0);
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
+            if (playback.play(s, bytes)) {
+                s.status = .shown;
+                return;
+            }
             s.source = s.decode_current(bytes) catch {
                 s.source = .none;
                 s.status = .failed;
@@ -444,15 +467,21 @@ pub const State = struct {
         }
     }
 
-    fn decode_current(s: *State, bytes: []const u8) !Source {
+    /// Page `page` of the file in `bytes`; also sets `page_count`.
+    pub fn decode_current(s: *State, bytes: []const u8) !Source {
         const system = builtin.os.tag == .macos and !decode.bundled_only(bytes);
-        if (system) return .{ .encoded = bytes };
+        if (system and s.page == 0) {
+            s.page_count = decode.page_count(bytes);
+            return .{ .encoded = bytes };
+        }
         const full = std.math.maxInt(u32);
-        const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
+        const size = decode.decode_fit(bytes, s.current_pixels, full, full, s.page) catch |err| {
             const portable = if (sniff.detect(bytes)) |f| f.baseline() else false;
-            if (err == error.Unavailable or portable) return .{ .encoded = bytes };
+            const nanoui_reads = err == error.Unavailable or portable;
+            if (s.page == 0 and nanoui_reads) return .{ .encoded = bytes };
             return err;
         };
+        s.page_count = size.page_count;
         return .{ .pixels = .{
             .bgra = s.current_pixels[0 .. size.width * size.height * 4],
             .width = size.width,
@@ -466,6 +495,8 @@ pub const State = struct {
     /// keep the viewport, generation and turns.
     pub fn promote(s: *State) void {
         assert(s.source == .pixels and !s.promote_failed);
+        // An animation's canvas is full size, and its file must stay in `file_buffer`.
+        assert(!s.player.active());
         if (paths.read_file(s.io, s.path(), s.file_buffer)) |bytes| {
             s.source = s.decode_current(bytes) catch {
                 s.promote_failed = true;
@@ -666,6 +697,7 @@ pub const State = struct {
 
     /// Back to the empty window.
     fn clear(s: *State) void {
+        s.player.stop();
         s.status = .empty;
         s.source = .none;
         s.index = null;
@@ -730,7 +762,7 @@ pub const State = struct {
             .none => unreachable,
         };
         const decode_macos = @import("decode_macos.zig");
-        const full = decode_macos.decode_full(encoded) catch |err| return switch (err) {
+        const full = decode_macos.decode_full(encoded, s.page) catch |err| return switch (err) {
             error.TooLarge => s.notify("{s} is too large to copy", .{s.basename()}),
             else => s.notify("Cannot copy {s}", .{s.basename()}),
         };
@@ -921,10 +953,12 @@ pub const State = struct {
     /// picture by key, so new content needs a new key.
     pub fn picture_key(s: *const State, buf: *[16]u8) []const u8 {
         const prefix = switch (s.source) {
-            .pixels => if (s.promoted) "f" else "p",
+            .pixels => if (s.player.active()) "a" else if (s.promoted) "f" else "p",
             else => "e",
         };
-        const key = std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, s.generation }) catch unreachable;
+        // Each frame of an animation is new content.
+        const number = if (s.player.active()) s.player.serial else s.generation;
+        const key = std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, number }) catch unreachable;
         assert(key.len > 1);
         return key;
     }

@@ -7,6 +7,7 @@ const preload = @import("preload.zig");
 const settings = @import("settings.zig");
 const recent = @import("recent.zig");
 const instance = @import("instance.zig");
+const animation = @import("animation.zig");
 const State = app_state.State;
 
 // About 1.2 MiB: never on the stack.
@@ -24,7 +25,9 @@ pub fn main(init: std.process.Init) !void {
     defer app_state.free_pages(scratch);
     const current_pixels = try app_state.alloc_pages(app_state.current_pixels_max);
     defer app_state.free_pages(current_pixels);
-    state.init(init.io, init.gpa, file_buffer, pool, scratch, current_pixels);
+    const animation_memory = try app_state.alloc_pages(animation.memory_bytes);
+    defer app_state.free_pages(animation_memory);
+    state.init(init.io, init.gpa, file_buffer, pool, scratch, current_pixels, animation_memory);
     load_settings(init);
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var files: [@import("folder.zig").entries_max][]const u8 = undefined;

@@ -11,6 +11,9 @@ const actions = @import("actions.zig");
 const keymap = @import("keymap.zig");
 const settings_mod = @import("settings.zig");
 const exif = @import("exif.zig");
+const playback = @import("playback.zig");
+const pages = @import("pages.zig");
+const save = @import("save.zig");
 const State = app.State;
 const assert = std.debug.assert;
 
@@ -27,6 +30,7 @@ pub fn view(s: *State, c: *ui.Context) void {
     c.wants_moves = c.input.down;
     keys(s, c);
     slideshow(s, c);
+    if (playback.tick(s, c.time)) |wait| c.frameIn(wait);
 
     const root = ui.div(c).sizeFull().center().bg(background(s, c));
     defer root.end();
@@ -317,12 +321,15 @@ fn info(s: *State, c: *ui.Context) void {
     const pw: u32 = @intFromFloat(vp.image_w);
     const ph: u32 = @intFromFloat(vp.image_h);
     const name = s.basename();
+    var extra_buf: [2][64]u8 = undefined;
+    const page = pages.info(s, &extra_buf[0]);
+    const frame = playback.info(s, &extra_buf[1]);
     const line = if (s.index) |i|
-        c.print("{s} · {d}×{d} · {d}% · {d}/{d}", .{
-            name, pw, ph, vp.percent(), i + 1, s.folder.count,
+        c.print("{s} · {d}×{d} · {d}% · {d}/{d}{s}{s}", .{
+            name, pw, ph, vp.percent(), i + 1, s.folder.count, page, frame,
         })
     else
-        c.print("{s} · {d}×{d} · {d}%", .{ name, pw, ph, vp.percent() });
+        c.print("{s} · {d}×{d} · {d}%{s}{s}", .{ name, pw, ph, vp.percent(), page, frame });
     const box = ui.div(c).absolute().offset(12, c.size.h - 60).px(8).py(4).rounded(6)
         .bg(ui.Color.black.alpha(0.6));
     defer box.end();
@@ -522,6 +529,10 @@ pub fn perform(s: *State, c: *ui.Context, action: actions.Action) void {
         .copy_image => s.copy_image(),
         .paste => s.paste(),
         .rename => s.start_rename(),
+        .pause, .next_frame, .slower, .faster => playback.perform(s, action),
+        .next_page => pages.turn(s, 1),
+        .previous_page => pages.turn(s, -1),
+        .save_frame => save.save_frame(s),
     }
 }
 

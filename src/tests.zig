@@ -1,10 +1,13 @@
-const std = @import("std");
 const builtin = @import("builtin");
+const std = @import("std");
 const ui = @import("nanoui").ui;
 const app = @import("app.zig");
 const view = @import("view.zig");
 const paths = @import("paths.zig");
 const preload = @import("preload.zig");
+const animation = @import("animation.zig");
+const decode = @import("decode.zig");
+const save_mod = @import("save.zig");
 const State = app.State;
 const testing = std.testing;
 
@@ -25,6 +28,8 @@ test {
     _ = @import("decode.zig");
     _ = @import("webp.zig");
     _ = @import("wuffs.zig");
+    _ = @import("animation.zig");
+    _ = @import("png_save.zig");
     _ = @import("decode_windows.zig");
     _ = @import("fileops.zig");
     _ = @import("instance.zig");
@@ -69,6 +74,7 @@ const Fixture = struct {
     pool: []u8,
     scratch: []u8,
     current_pixels: []u8,
+    animation_memory: []u8,
     tester: ui.Tester = undefined,
     tmp: std.testing.TmpDir,
     dir_buf: [paths.path_max]u8 = undefined,
@@ -85,10 +91,19 @@ const Fixture = struct {
             .pool = try app.alloc_pages(preload.pool_bytes),
             .scratch = try app.alloc_pages(if (preload.decoded) app.file_size_max else 0),
             .current_pixels = try app.alloc_pages(app.current_pixels_max),
+            .animation_memory = try app.alloc_pages(animation.memory_bytes),
             .tmp = testing.tmpDir(.{}),
         };
         const pixels = f.current_pixels;
-        state.init(testing.io, testing.allocator, f.file_buffer, f.pool, f.scratch, pixels);
+        state.init(
+            testing.io,
+            testing.allocator,
+            f.file_buffer,
+            f.pool,
+            f.scratch,
+            pixels,
+            f.animation_memory,
+        );
         state.clipboard = fake_clipboard;
         pasted = .{};
         f.dir_len = try f.tmp.dir.realPathFile(testing.io, ".", &f.dir_buf);
@@ -106,6 +121,7 @@ const Fixture = struct {
         app.free_pages(f.pool);
         app.free_pages(f.scratch);
         app.free_pages(f.current_pixels);
+        app.free_pages(f.animation_memory);
         testing.allocator.destroy(f.state);
         testing.allocator.destroy(f);
     }
@@ -965,4 +981,425 @@ test "pasting with no picture on the clipboard says so" {
     _ = f.tester.shortcut(.{ .key = 'v', .cmd = true });
     try testing.expect(f.tester.containsText("The clipboard holds no picture"));
     try testing.expectEqual(app.Status.empty, f.state.status);
+}
+
+const anim_fixtures = @import("wuffs_fixtures.zig");
+const bgra_red = [4]u8{ 0, 0, 255, 255 };
+const bgra_green = [4]u8{ 0, 255, 0, 255 };
+const bgra_blue = [4]u8{ 255, 0, 0, 255 };
+
+fn gif_dot(indices: []const u8, delay_cs: u16) anim_fixtures.GifFrame {
+    return .{
+        .x = 0,
+        .y = 0,
+        .width = 1,
+        .height = 1,
+        .delay_cs = delay_cs,
+        .disposal = 1,
+        .transparent = null,
+        .indices = indices,
+    };
+}
+
+/// Red for 0.3 s, green for 0.6 s, blue for 0.9 s; the NETSCAPE count 1 is two plays.
+const gif_three = anim_fixtures.gif(1, 1, .{
+    .{ 255, 0, 0 },
+    .{ 0, 255, 0 },
+    .{ 0, 0, 255 },
+    .{ 0, 0, 0 },
+}, 1, &.{ gif_dot(&.{0}, 30), gif_dot(&.{1}, 60), gif_dot(&.{2}, 90) });
+
+/// Red for 0.1 s, then blue for 0.2 s, played once.
+const apng_two = anim_fixtures.apng(1, 1, 1, &.{
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 1,
+        .height = 1,
+        .delay_num = 1,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{.{ 255, 0, 0, 255 }},
+    },
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 1,
+        .height = 1,
+        .delay_num = 2,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{.{ 0, 0, 255, 255 }},
+    },
+});
+
+fn shown_pixel(f: *Fixture, index: usize) [4]u8 {
+    return f.state.source.pixels.bgra[index * 4 ..][0..4].*;
+}
+
+/// Runs frames until `seconds` after `start` on the tester's clock.
+fn wait_until(f: *Fixture, start: f64, seconds: f64) void {
+    const left = start + seconds - f.tester.time;
+    if (left > 0) f.tester.advance(@floatCast(left));
+}
+
+fn write_file(f: *Fixture, name: []const u8, data: []const u8) !void {
+    try f.tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = data });
+}
+
+test "a GIF shows each frame for its delay and stops after its plays" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.gif", gif_three);
+    f.state.settings.fit_upscale = true;
+    const start = f.tester.time;
+    try f.open("a.gif");
+    try testing.expect(f.state.player.active());
+    const timeline = [_]struct { f64, [4]u8 }{
+        .{ 0.15, bgra_red }, .{ 0.6, bgra_green }, .{ 1.35, bgra_blue },
+        .{ 1.95, bgra_red }, .{ 2.4, bgra_green }, .{ 3.5, bgra_blue },
+        .{ 6.0, bgra_blue },
+    };
+    var key_bufs: [timeline.len][16]u8 = undefined;
+    var keys: [timeline.len][]const u8 = undefined;
+    for (timeline, 0..) |point, i| {
+        wait_until(f, start, point[0]);
+        try testing.expectEqualSlices(u8, &point[1], &shown_pixel(f, 0));
+        keys[i] = f.state.picture_key(&key_bufs[i]);
+    }
+    try testing.expect(f.state.player.finished and !f.state.player.playing);
+    // Each new frame has its own key: nanoui would show the cached frame otherwise.
+    for (keys[0..5], keys[1..6]) |a, b| try testing.expect(!std.mem.eql(u8, a, b));
+    try testing.expectEqualStrings(keys[5], keys[6]);
+    const pixels = try f.tester.render(testing.allocator);
+    defer pixels.deinit(testing.allocator);
+    const center = (pixels.height / 2 * pixels.width + pixels.width / 2) * 4;
+    // The offscreen renderer converts colors slightly.
+    const drawn = pixels.bytes[center..][0..4];
+    try testing.expect(drawn[0] > 240 and drawn[1] < 16 and drawn[2] < 16);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("frame 3/3"));
+}
+
+test "pause holds the frame, next frame steps and wraps, speed says so" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.gif", gif_three);
+    const start = f.tester.time;
+    try f.open("a.gif");
+    wait_until(f, start, 0.6);
+    _ = f.tester.shortcut(.{ .key = 'k' });
+    try testing.expect(f.tester.containsText("Paused"));
+    wait_until(f, start, 3);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("frame 2, paused"));
+    _ = f.tester.shortcut(.{ .key = '.' });
+    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 0));
+    _ = f.tester.shortcut(.{ .key = '.' });
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    try testing.expect(f.tester.containsText("frame 1/3, paused"));
+    _ = f.tester.shortcut(.{ .key = 'k' });
+    try testing.expect(f.tester.containsText("Playing"));
+    const resumed = f.tester.time;
+    wait_until(f, resumed, 0.2);
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    wait_until(f, resumed, 0.4);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+    _ = f.tester.shortcut(.{ .key = ']' });
+    try testing.expect(f.tester.containsText("Speed 125%"));
+    _ = f.tester.shortcut(.{ .key = '[' });
+    _ = f.tester.shortcut(.{ .key = '[' });
+    try testing.expect(f.tester.containsText("Speed 75%"));
+}
+
+test "stepping away stops an animation and coming back restarts it" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.write_png("a.png", 4, 4);
+    try write_file(f, "b.gif", gif_three);
+    try f.open("a.png");
+    f.state.preload.set_bounds(960, 720);
+    _ = drain(&f.state.preload);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    // The preloaded first frame cannot play: the file is read again.
+    try testing.expect(f.state.player.active());
+    var start = f.tester.time;
+    wait_until(f, start, 0.6);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+    try testing.expectEqualStrings("a.png", f.state.basename());
+    try testing.expect(!f.state.player.active());
+    _ = f.tester.shortcut(.{ .key = 'k' });
+    try testing.expect(f.tester.containsText("Not an animation"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.left });
+    try testing.expect(f.state.player.active());
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    start = f.tester.time;
+    wait_until(f, start, 0.15);
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    wait_until(f, start, 0.6);
+    try testing.expectEqualSlices(u8, &bgra_green, &shown_pixel(f, 0));
+}
+
+test "an animated WebP and an APNG play their frames and loop counts" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.webp", @embedFile("testdata/webp_anim.webp"));
+    try write_file(f, "b.png", apng_two);
+    // Two frames of 0.1 s and 0.25 s, three plays.
+    var start = f.tester.time;
+    try f.open("a.webp");
+    try testing.expect(f.state.player.active());
+    const webp_timeline = [_]struct { f64, [4]u8 }{
+        .{ 0.05, bgra_red }, .{ 0.25, bgra_blue }, .{ 0.4, bgra_red },
+        .{ 0.6, bgra_blue }, .{ 2.0, bgra_blue },
+    };
+    for (webp_timeline) |point| {
+        wait_until(f, start, point[0]);
+        try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+        try testing.expectEqualSlices(u8, &point[1], &shown_pixel(f, 1));
+    }
+    try testing.expect(f.state.player.finished);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("frame 2/2"));
+    start = f.tester.time;
+    try f.open("b.png");
+    try testing.expect(f.state.player.active());
+    try testing.expectEqualSlices(u8, &bgra_red, &shown_pixel(f, 0));
+    wait_until(f, start, 0.2);
+    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 0));
+    wait_until(f, start, 1.0);
+    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 0));
+    try testing.expect(f.state.player.finished);
+}
+
+test "animation off and a picture over the limit show the first frame" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.gif", gif_three);
+    f.state.settings.animation = false;
+    try f.open("a.gif");
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    try testing.expect(!f.state.player.active());
+    f.state.settings.animation = true;
+    const wide = comptime anim_fixtures.gif(4097, 4096, .{
+        .{ 255, 0, 0 },
+        .{ 0, 255, 0 },
+        .{ 0, 0, 255 },
+        .{ 0, 0, 0 },
+    }, 0, &.{ gif_dot(&.{0}, 10), gif_dot(&.{1}, 10) });
+    try write_file(f, "b.gif", wide);
+    try f.open("b.gif");
+    try testing.expect(!f.state.player.active());
+    try testing.expect(f.tester.containsText("Too large to animate"));
+}
+
+const TiffPage = struct { width: u16, height: u16, rgb: [3]u8 };
+
+fn put_le(out: *std.ArrayList(u8), comptime T: type, value: T) !void {
+    var bytes: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, &bytes, value, .little);
+    try out.appendSlice(testing.allocator, &bytes);
+}
+
+fn tiff_entry(out: *std.ArrayList(u8), tag: u16, kind: u16, count: u32, value: u32) !void {
+    try put_le(out, u16, tag);
+    try put_le(out, u16, kind);
+    try put_le(out, u32, count);
+    if (kind == 3 and count == 1) {
+        try put_le(out, u16, @intCast(value));
+        try put_le(out, u16, 0);
+    } else try put_le(out, u32, value);
+}
+
+/// An uncompressed RGB TIFF with one solid page per entry. Each page is its bits per
+/// sample, one strip and its directory.
+fn tiff_pages(pages_in: []const TiffPage) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(testing.allocator);
+    const ifd_len: u32 = 2 + 9 * 12 + 4;
+    var starts: [4]u32 = undefined;
+    var ifds: [4]u32 = undefined;
+    var at: u32 = 8;
+    for (pages_in, 0..) |p, i| {
+        const n = @as(u32, p.width) * p.height * 3;
+        starts[i] = at;
+        ifds[i] = at + 6 + n + n % 2;
+        at = ifds[i] + ifd_len;
+    }
+    try out.appendSlice(testing.allocator, "II*\x00");
+    try put_le(&out, u32, ifds[0]);
+    for (pages_in, 0..) |p, i| {
+        const n = @as(u32, p.width) * p.height * 3;
+        for (0..3) |_| try put_le(&out, u16, 8);
+        for (0..n / 3) |_| try out.appendSlice(testing.allocator, &p.rgb);
+        if (n % 2 == 1) try out.append(testing.allocator, 0);
+        try testing.expectEqual(ifds[i], out.items.len);
+        try put_le(&out, u16, 9);
+        try tiff_entry(&out, 256, 3, 1, p.width);
+        try tiff_entry(&out, 257, 3, 1, p.height);
+        try tiff_entry(&out, 258, 3, 3, starts[i]);
+        try tiff_entry(&out, 259, 3, 1, 1);
+        try tiff_entry(&out, 262, 3, 1, 2);
+        try tiff_entry(&out, 273, 4, 1, starts[i] + 6);
+        try tiff_entry(&out, 277, 3, 1, 3);
+        try tiff_entry(&out, 278, 3, 1, p.height);
+        try tiff_entry(&out, 279, 4, 1, n);
+        try put_le(&out, u32, if (i + 1 == pages_in.len) 0 else ifds[i + 1]);
+    }
+    return out.toOwnedSlice(testing.allocator);
+}
+
+fn solid_png(side: usize, bgra: [4]u8) ![]u8 {
+    var pixels: [32 * 32][4]u8 = undefined;
+    std.debug.assert(side <= 32);
+    @memset(pixels[0 .. side * side], bgra);
+    return ui.png.encode(testing.allocator, .{
+        .bytes = @ptrCast(pixels[0 .. side * side]),
+        .width = side,
+        .height = side,
+    });
+}
+
+/// An icon whose sizes are PNG pictures.
+fn ico_sizes(sides: []const u8, pngs: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(testing.allocator);
+    try put_le(&out, u16, 0);
+    try put_le(&out, u16, 1);
+    try put_le(&out, u16, @intCast(pngs.len));
+    var offset: u32 = @intCast(6 + 16 * pngs.len);
+    for (sides, pngs) |side, png| {
+        try out.appendSlice(testing.allocator, &.{ side, side, 0, 0 });
+        try put_le(&out, u16, 1);
+        try put_le(&out, u16, 32);
+        try put_le(&out, u32, @intCast(png.len));
+        try put_le(&out, u32, offset);
+        offset += @intCast(png.len);
+    }
+    for (pngs) |png| try out.appendSlice(testing.allocator, png);
+    return out.toOwnedSlice(testing.allocator);
+}
+
+test "pages of a TIFF and sizes of an icon turn with page down and page up" {
+    if (builtin.os.tag == .linux) return error.SkipZigTest; // gdk-pixbuf reads page 1 only
+    const f = try Fixture.create();
+    defer f.destroy();
+    const tiff = try tiff_pages(&.{
+        .{ .width = 4, .height = 2, .rgb = .{ 255, 0, 0 } },
+        .{ .width = 3, .height = 5, .rgb = .{ 0, 0, 255 } },
+    });
+    defer testing.allocator.free(tiff);
+    try write_file(f, "a.tif", tiff);
+    try f.open("a.tif");
+    try testing.expect(f.tester.containsText("Page 1 of 2"));
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("4×2"));
+    try testing.expect(f.tester.containsText("page 1/2"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    try testing.expect(f.tester.containsText("Page 2 of 2"));
+    try testing.expect(f.tester.containsText("3×5"));
+    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 14));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    try testing.expect(f.tester.containsText("page 2/2"));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.up, .alt = true });
+    try testing.expect(f.tester.containsText("Page 1 of 2"));
+    try testing.expect(f.tester.containsText("4×2"));
+    const red = try solid_png(32, bgra_red);
+    defer testing.allocator.free(red);
+    const blue = try solid_png(16, bgra_blue);
+    defer testing.allocator.free(blue);
+    const ico = try ico_sizes(&.{ 32, 16 }, &.{ red, blue });
+    defer testing.allocator.free(ico);
+    try write_file(f, "b.ico", ico);
+    try f.open("b.ico");
+    try testing.expectEqual(@as(u32, 2), f.state.page_count);
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    // ImageIO reads no icon size under 16 pixels.
+    try testing.expect(f.tester.containsText("16×16"));
+    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 255));
+    // Another picture starts at its first page; a single picture has none to turn.
+    try f.write_png("c.png", 2, 2);
+    try f.open("c.png");
+    try testing.expect(!f.tester.containsText("page "));
+    _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
+    try testing.expect(f.tester.containsText("Single page"));
+    try f.open("a.tif");
+    try testing.expectEqual(@as(u32, 0), f.state.page);
+}
+
+/// Opaque red twice, then half-transparent blue beside opaque green.
+const apng_alpha = anim_fixtures.apng(2, 1, 0, &.{
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 2,
+        .height = 1,
+        .delay_num = 1,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{ .{ 255, 0, 0, 255 }, .{ 255, 0, 0, 255 } },
+    },
+    .{
+        .x = 0,
+        .y = 0,
+        .width = 2,
+        .height = 1,
+        .delay_num = 1,
+        .delay_den = 10,
+        .dispose = 0,
+        .blend = 0,
+        .pixels = &.{ .{ 0, 0, 255, 128 }, .{ 0, 255, 0, 255 } },
+    },
+});
+
+fn saved_path(f: *Fixture, name: []const u8, buf: []u8) []const u8 {
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ f.dir_buf[0..f.dir_len], name }) catch unreachable;
+}
+
+test "save frame writes the shown frame unrotated and it reads back the same" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try write_file(f, "a.png", apng_alpha);
+    try f.open("a.png");
+    _ = f.tester.shortcut(.{ .key = '.' });
+    try testing.expectEqual(@as(u32, 1), f.state.player.frame_index);
+    var shown: [8]u8 = undefined;
+    @memcpy(&shown, f.state.player.canvas()[0..8]);
+    _ = f.tester.shortcut(.{ .key = 'r' });
+    var path_buf: [paths.path_max]u8 = undefined;
+    save_mod.save_to(f.state, saved_path(f, "frame.png", &path_buf));
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Saved frame.png"));
+    const gpa = testing.allocator;
+    const bytes = try f.tmp.dir.readFileAlloc(testing.io, "frame.png", gpa, .unlimited);
+    defer testing.allocator.free(bytes);
+    try testing.expect(animation.detect(bytes) == null);
+    var back: [8]u8 = undefined;
+    const size = try decode.decode_fit(bytes, &back, 100, 100, 0);
+    try testing.expectEqual(@as(u32, 2), size.width);
+    try testing.expectEqual(@as(u32, 1), size.height);
+    for (shown, back) |a, b| try testing.expect(@abs(@as(i16, a) - b) <= 1);
+    try testing.expect(back[3] == 128 and back[0] >= 127); // blue kept its alpha
+    try f.open("frame.png");
+    try testing.expectEqual(app.Status.shown, f.state.status);
+    _ = f.tester.shortcut(.{ .key = 'i' });
+    try testing.expect(f.tester.containsText("2×1"));
+    // A still that nanoui decodes is read again at full size.
+    try f.write_png("white.png", 4, 3);
+    try f.open("white.png");
+    save_mod.save_to(f.state, saved_path(f, "white copy.png", &path_buf));
+    const copy = try f.tmp.dir.readFileAlloc(testing.io, "white copy.png", gpa, .unlimited);
+    defer testing.allocator.free(copy);
+    var white: [4 * 3 * 4]u8 = undefined;
+    const copy_size = try decode.decode_fit(copy, &white, 100, 100, 0);
+    try testing.expectEqual(@as(u32, 4), copy_size.width);
+    try testing.expect(std.mem.allEqual(u8, &white, 0xff));
+    save_mod.save_to(f.state, "/nonexistent directory/x.png");
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("Cannot save the frame"));
 }

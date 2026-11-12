@@ -83,6 +83,8 @@ pub const Settings = struct {
     recent: bool = true,
     /// A second nanoview hands its files to the running one and exits.
     single_instance: bool = false,
+    /// Animated GIF, APNG and WebP play; off shows their first frame.
+    animation: bool = true,
 };
 
 pub const Reason = enum {
@@ -282,6 +284,7 @@ test "all settings parse with whitespace comments and blank lines" {
         \\title_bar = hidden
         \\always_on_top = true
         \\recent = false
+        \\animation = false
         \\
     , &settings) == null);
     try testing.expectEqualDeep(Settings{
@@ -306,6 +309,7 @@ test "all settings parse with whitespace comments and blank lines" {
         .title_bar = .hidden,
         .always_on_top = true,
         .recent = false,
+        .animation = false,
     }, settings);
     const tail = "\tzoom_step_percent = 1\r\nslideshow_seconds=1\nbackground=theme";
     try testing.expect(parse_plain(tail, &settings) == null);

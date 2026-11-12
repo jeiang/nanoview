@@ -38,6 +38,13 @@ pub const Action = enum {
     copy_image,
     paste,
     rename,
+    pause,
+    next_frame,
+    slower,
+    faster,
+    next_page,
+    previous_page,
+    save_frame,
 };
 
 pub const Binding = struct { shortcut: ui.Shortcut, action: Action };
@@ -86,6 +93,13 @@ pub const bindings = [_]Binding{
     .{ .shortcut = .{ .key = 'c', .cmd = true }, .action = .copy_image },
     .{ .shortcut = .{ .key = 'v', .cmd = true }, .action = .paste },
     .{ .shortcut = .{ .key = key.f(2) }, .action = .rename },
+    .{ .shortcut = .{ .key = 'k' }, .action = .pause },
+    .{ .shortcut = .{ .key = '.' }, .action = .next_frame },
+    .{ .shortcut = .{ .key = '[' }, .action = .slower },
+    .{ .shortcut = .{ .key = ']' }, .action = .faster },
+    .{ .shortcut = .{ .key = key.down, .alt = true }, .action = .next_page },
+    .{ .shortcut = .{ .key = key.up, .alt = true }, .action = .previous_page },
+    .{ .shortcut = .{ .key = 's', .cmd = true, .shift = true }, .action = .save_frame },
 };
 
 pub fn same(a: ui.Shortcut, b: ui.Shortcut) bool {
