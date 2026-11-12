@@ -103,11 +103,27 @@ pub const shell = struct {
 
     /// Moves the file at `path` to the Trash.
     pub fn trash(file: []const u8) bool {
+        var none: [0]u8 = .{};
+        return trashTo(file, &none) != null;
+    }
+
+    /// Moves the file at `path` to the Trash and writes the path it now
+    /// has there to `out`, for moving it back: null when it did not move,
+    /// empty when it moved but the system did not say where, or the path
+    /// is longer than `out`.
+    pub fn trashTo(file: []const u8, out: []u8) ?[]u8 {
         const pool = objc.Pool.push();
         defer pool.pop();
         const u = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(file)});
         const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
-        return objc.msg(objc.BOOL, fm, "trashItemAtURL:resultingItemURL:error:", .{ u, @as(?*anyopaque, null), @as(?*anyopaque, null) });
+        // Autoreleased, so it lives until the pool pops.
+        var result: ?objc.Object = null;
+        if (!objc.msg(objc.BOOL, fm, "trashItemAtURL:resultingItemURL:error:", .{ u, &result, @as(?*anyopaque, null) })) return null;
+        const url = result orelse return out[0..0];
+        const p = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
+        if (p.len > out.len) return out[0..0];
+        @memcpy(out[0..p.len], p);
+        return out[0..p.len];
     }
 
     /// Plays the system's alert sound.

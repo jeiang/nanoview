@@ -104,6 +104,10 @@ pub const shell = struct {
         return false;
     }
 
+    pub fn trashTo(_: []const u8, _: []u8) ?[]u8 {
+        return null;
+    }
+
     pub fn beep() void {}
 };
 
