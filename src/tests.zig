@@ -1393,11 +1393,15 @@ test "pages of a TIFF and sizes of an icon turn with page down and page up" {
     try write_file(f, "b.ico", ico);
     try f.open("b.ico");
     try testing.expectEqual(@as(u32, 2), f.state.page_count);
+    // ImageIO keeps the file's order of sizes and WIC does not: either size may be first.
+    const small_first = f.tester.containsText("16×16");
+    try testing.expect(small_first or f.tester.containsText("32×32"));
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.down, .alt = true });
     try testing.expect(f.tester.containsText("Page 2 of 2"));
     // ImageIO reads no icon size under 16 pixels.
-    try testing.expect(f.tester.containsText("16×16"));
-    try testing.expectEqualSlices(u8, &bgra_blue, &shown_pixel(f, 255));
+    try testing.expect(f.tester.containsText(if (small_first) "32×32" else "16×16"));
+    const second = if (small_first) bgra_red else bgra_blue;
+    try testing.expectEqualSlices(u8, &second, &shown_pixel(f, 255));
     // Another picture starts at its first page; a single picture has none to turn.
     try f.write_png("c.png", 2, 2);
     try f.open("c.png");
