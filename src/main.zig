@@ -4,6 +4,7 @@ const nanoui = @import("nanoui");
 const app_state = @import("app.zig");
 const view = @import("view.zig");
 const preload = @import("preload.zig");
+const settings = @import("settings.zig");
 const State = app_state.State;
 
 // About 1.2 MiB: never on the stack.
@@ -20,6 +21,7 @@ pub fn main(init: std.process.Init) !void {
     const scratch = try app_state.alloc_pages(scratch_len);
     defer app_state.free_pages(scratch);
     state.init(init.io, init.gpa, file_buffer, pool, scratch);
+    load_settings(init);
     app.onOpenFiles(&state, State.on_open_files);
     state.window = try app.newWindow(.{
         .title = "nanoview",
@@ -45,4 +47,13 @@ pub fn main(init: std.process.Init) !void {
         break;
     }
     try app.run();
+}
+
+fn load_settings(init: std.process.Init) void {
+    const directory = settings.config_directory(init.gpa, init.environ_map) catch |err| {
+        state.notify("settings.conf: {s}", .{@errorName(err)});
+        return;
+    };
+    defer init.gpa.free(directory);
+    state.load_settings(directory);
 }

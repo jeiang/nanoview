@@ -88,6 +88,17 @@ pub const State = struct {
         assert(s.status == .empty and s.folder.count == 0);
     }
 
+    /// Called once, before the window opens. notify starts its timer on the first frame.
+    pub fn load_settings(s: *State, directory: []const u8) void {
+        const problem = settings_mod.load(s.io, directory, &s.settings) catch |err| {
+            s.notify("settings.conf: {s}", .{@errorName(err)});
+            return;
+        };
+        if (problem) |p| {
+            s.notify("settings.conf line {d}: {s}", .{ p.line, p.reason.text() });
+        }
+    }
+
     pub fn path(s: *const State) []const u8 {
         assert(s.path_len <= paths.path_max);
         return s.path_buf[0..s.path_len];
