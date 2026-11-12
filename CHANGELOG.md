@@ -18,6 +18,11 @@ section that matches its tag.
   the picture (`b`), and zoom below fit down to 10 %.
 - Opening a folder, and opening several pictures at once.
 - The info line also shows the format, file size and modified date.
+- EXIF details (`e`): camera, lens, date, exposure, GPS and color profile, from JPEG, TIFF-based
+  files, PNG and WebP.
+- A picture is known by its content: a file with a wrong or missing extension opens when
+  chosen, and the info line names its real format.
+- Windows: pictures with an embedded color profile are converted to sRGB.
 - `settings.conf`, read at startup: fit, zoom, loop, slideshow and trash options.
 - Settings for the background color, when and how far the window follows the picture, the
   sort order, the title text, a hidden title bar (Windows) and always on top (`t`).
@@ -29,7 +34,7 @@ section that matches its tag.
 - BMP, QOI, TGA and WebP pictures open on every system through bundled decoders (Wuffs v0.4
   and libwebp v1.6.0); the archives carry their license notices.
 - macOS: JPEG 2000, PSD, ICNS, TGA, OpenEXR, SGI, PBM, JPEG XL, MPO, PICT and some camera RAW
-  pictures (DNG, CR3, RW2, RWL, 3FR).
+  pictures (DNG, CR3, RW2, RWL, 3FR, FFF, ARW, SR2, SRF, NEF, NRW, PEF, ERF).
 - Linux: pictures decode through gdk-pixbuf when it is installed (WebP, AVIF, HEIC, TIFF, BMP,
   ICO and more); Move to Trash; reveal selects the file; touchpad pan and pinch; the window
   takes the picture's size on GTK 4.

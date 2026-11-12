@@ -69,6 +69,8 @@ the snapshot flag a real window opens and does not exit.
 | `src/recent.zig` | The recent files list and its file |
 | `src/instance.zig`, `instance_posix.zig`, `instance_windows.zig` | Single instance: the message, a Unix socket, a mutex with `WM_COPYDATA` |
 | `src/metadata.zig` | File size, date and format for the info line |
+| `src/sniff.zig` | Picture format from the first bytes |
+| `src/exif.zig` | Bounded EXIF/TIFF IFD walker, ICC profile name, text of the details panel |
 | `src/shell.zig` | Trash and reveal; macOS goes through nanoui |
 | `src/shell_linux.zig`, `shell_dbus.zig` | FreeDesktop trash; `FileManager1.ShowItems` through GIO (dlopen) |
 | `src/shell_windows.zig` | Recycle Bin and Explorer selection |

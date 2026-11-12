@@ -47,6 +47,7 @@ Several pictures from one folder limit the list to those pictures until the next
 | `r`, `l` | Rotate right, left |
 | `m`, `v` | Mirror, flip |
 | `i` | Show name, size, zoom, position, format, file size and date |
+| `e` | Show EXIF details: camera, lens, date, exposure, GPS, color profile |
 | `f`, Escape | Full screen, leave full screen |
 | Cmd+Backspace, Forward Delete | Move to Trash |
 | Cmd/Ctrl+Z | Put back the last picture moved to the Trash (not on Windows) |
@@ -71,13 +72,19 @@ them ([Wuffs](https://github.com/google/wuffs) and
 first and adds more:
 
 - macOS (ImageIO): HEIC, AVIF, TIFF, ICO, JPEG 2000, PSD, ICNS, OpenEXR, SGI, PBM, JPEG XL,
-  MPO (first picture), PICT, and camera RAW as DNG, Canon CR3, Panasonic RW2, Leica RWL and
-  Hasselblad 3FR. Other camera RAW formats are not listed: only their small embedded preview
-  would show.
+  MPO (first picture), PICT, and camera RAW as DNG, Canon CR3, Panasonic RW2, Leica RWL,
+  Hasselblad 3FR and FFF, Sony ARW, SR2 and SRF, Nikon NEF and NRW, Pentax PEF and Epson ERF.
+  Other camera RAW formats are not listed: only their small embedded preview would show.
 - Linux: with gdk-pixbuf 2 (`libgdk_pixbuf-2.0.so.0`) installed, what its loaders read from
   this set: AVIF, HEIC, TIFF, ICO, JPEG XL, JPEG 2000, ICNS, PNM, PCX, XBM and XPM.
 - Windows (WIC): what the installed decoders list at startup from this set: TIFF, ICO, DDS,
   JPEG XR, and HEIC, AVIF and JPEG XL with the matching codec from the Microsoft Store.
+
+A picture is known by its content: a file with a wrong or missing extension opens when you
+choose it, and the info line names its real format. A folder is still listed by extension.
+
+Colors: macOS converts every picture to sRGB. Windows converts pictures with an embedded
+color profile. Linux shows the stored values.
 
 Animated pictures show their first frame. Linux needs GTK 3 or 4 and OpenGL. The licenses of
 the bundled code are in `share/licenses/nanoview` (in `Resources/licenses` inside the macOS
