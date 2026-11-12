@@ -43,6 +43,16 @@ pub fn init_extensions() void {
     assert(extensions.len <= extensions_max);
 }
 
+/// Whether nanoui's own decoders read this file: the fallback when a system
+/// decoder is missing or rejects the file.
+pub fn is_baseline_name(file_name: []const u8) bool {
+    const ext = extension(file_name);
+    for (baseline_extensions) |known| {
+        if (std.ascii.eqlIgnoreCase(ext, known)) return true;
+    }
+    return false;
+}
+
 pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
 
 pub const Folder = struct {
@@ -337,4 +347,12 @@ test "sort follows the order's key and direction" {
     f.order = .{ .key = .kind, .ascending = true };
     f.sort();
     try testing.expectEqualStrings("z.jpg", f.name(0));
+}
+
+test "only nanoui's own formats fall back to its decoders" {
+    try testing.expect(is_baseline_name("a.PNG"));
+    try testing.expect(is_baseline_name("b.jpeg"));
+    try testing.expect(is_baseline_name("c.gif"));
+    try testing.expect(!is_baseline_name("d.webp"));
+    try testing.expect(!is_baseline_name("png"));
 }

@@ -191,7 +191,9 @@ pub const Preload = struct {
         }
         const encoded = paths.read_file(p.io, file_path, p.scratch) catch return false;
         const size = decode.decode_fit(encoded, memory, job.bounds_w, job.bounds_h) catch |err| {
-            if (err != error.Unavailable or encoded.len > memory.len) return false;
+            const portable = folder_mod.is_baseline_name(std.fs.path.basename(file_path));
+            if (err != error.Unavailable and !portable) return false;
+            if (encoded.len > memory.len) return false;
             @memcpy(memory[0..encoded.len], encoded);
             result.* = .{ .encoded = true, .len = @intCast(encoded.len) };
             return true;

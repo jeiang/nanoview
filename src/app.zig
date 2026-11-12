@@ -323,7 +323,8 @@ pub const State = struct {
         if (builtin.os.tag == .macos) return .{ .encoded = bytes };
         const full = std.math.maxInt(u32);
         const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
-            if (err == error.Unavailable) return .{ .encoded = bytes };
+            const portable = folder_mod.is_baseline_name(s.basename());
+            if (err == error.Unavailable or portable) return .{ .encoded = bytes };
             return err;
         };
         return .{ .pixels = .{
