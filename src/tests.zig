@@ -17,6 +17,7 @@ test {
     _ = @import("sort_order.zig");
     _ = @import("explorer_sort.zig");
     _ = @import("actions.zig");
+    _ = @import("settings.zig");
 }
 
 /// A State and a Tester over it, on the heap: State is too large for the
@@ -219,4 +220,21 @@ test "a failed trash says so, then the message goes away" {
     try testing.expectEqualStrings("a.png", f.state.basename());
     f.tester.advance(5);
     try testing.expect(!f.tester.containsText("Could not move"));
+}
+
+test "startup settings errors survive until the window's first frame" {
+    const f = try Fixture.create();
+    defer f.destroy();
+    try f.tmp.dir.writeFile(testing.io, .{
+        .sub_path = "settings.conf",
+        .data = "smooth=invalid\nzoom_step_percent=80\n",
+    });
+    f.state.load_settings(f.dir_buf[0..f.dir_len]);
+    try testing.expectEqual(@as(u32, 80), f.state.settings.zoom_step_percent);
+    try testing.expect(f.state.settings.smooth);
+    try testing.expect(f.state.message_until == null);
+    f.tester.frame();
+    try testing.expect(f.tester.containsText("settings.conf line 1: bad value"));
+    f.tester.advance(1);
+    try testing.expect(f.tester.containsText("settings.conf line 1: bad value"));
 }
