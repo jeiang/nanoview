@@ -90,6 +90,7 @@ pub const Surface = struct {
     /// little after it (`resizeStepping`), not for the whole drag.
     resize_step_at: f64 = 0,
     geometry_changed: bool = false,
+    resized_in_frame: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
@@ -231,7 +232,13 @@ pub const Surface = struct {
 
     fn finishFrame(self: *Surface) void {
         self.in_frame = false;
-        if (self.dead) self.finishDestroy();
+        if (self.dead) return self.finishDestroy();
+        // The view resized its own window (`Window.setSize`): that frame was
+        // laid out at the old size, and nothing else asks for one at the new.
+        if (self.resized_in_frame) {
+            self.resized_in_frame = false;
+            self.requestFrame();
+        }
     }
     pub fn recordFrames(self: *Surface, gpa: std.mem.Allocator) !*FrameLog {
         if (self.frame_log == null) self.frame_log = try FrameLog.init(gpa, null);

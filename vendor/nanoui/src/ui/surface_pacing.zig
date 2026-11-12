@@ -139,5 +139,6 @@ pub fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.
         if (s.resizeInTransaction()) return;
         return s.requestFrame();
     }
+    if (s.in_frame) s.resized_in_frame = true;
     s.frame();
 }
