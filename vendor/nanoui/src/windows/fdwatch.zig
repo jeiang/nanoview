@@ -119,6 +119,14 @@ pub fn post(ctx: ?*anyopaque, func: Handler) bool {
     return w.PostMessageW(h, WM_CALL, @intFromPtr(func), @bitCast(@intFromPtr(ctx))) != 0;
 }
 
+/// The message-only window, made on first use (on the main thread): a
+/// window of the app's that always exists, for APIs that need an owner,
+/// as the clipboard does. Null if it could not be made.
+pub fn messageWindow() ?w.HWND {
+    window() catch return null;
+    return hwnd;
+}
+
 /// The message-only window, made on the main thread the first time.
 fn window() !void {
     if (hwnd != null) return;
