@@ -63,7 +63,9 @@ fn private_dir(parent: i32, name: [*:0]const u8, uid: u32) ?i32 {
         _ = linux.close(fd);
         return null;
     };
-    if (s.uid != uid or s.mode & 0o077 != 0) {
+    // No mode test: the specification asks for none here, and FAT, exFAT
+    // and NTFS mounts show every directory as 0755 whatever was asked.
+    if (s.uid != uid) {
         _ = linux.close(fd);
         return null;
     }
@@ -196,7 +198,7 @@ fn move(root: i32, source: [:0]const u8, original: []const u8, uid: u32) bool {
         const synced = if (written == text.len) linux.fsync(fd) else 1;
         const closed = linux.close(fd);
         const result = if (synced == 0 and closed == 0)
-            linux.renameat2(at_cwd, source, files, dest, .{ .NOREPLACE = true })
+            rename_no_replace(source, files, dest)
         else
             1;
         if (result == 0) return true;
@@ -204,6 +206,17 @@ fn move(root: i32, source: [:0]const u8, original: []const u8, uid: u32) bool {
         if (linux.errno(result) != .EXIST) return false;
     }
     return false;
+}
+
+/// NFS and FUSE without rename2 refuse the no-replace flag (EINVAL). The
+/// plain rename is safe there once the name is seen free: `files` is the
+/// user's own, and the name is reserved by its `.trashinfo`.
+fn rename_no_replace(source: [:0]const u8, files: i32, dest: [:0]const u8) usize {
+    const result = linux.renameat2(at_cwd, source, files, dest, .{ .NOREPLACE = true });
+    if (linux.errno(result) != .INVAL) return result;
+    const taken = linux.faccessat(files, dest, linux.F_OK, linux.AT.SYMLINK_NOFOLLOW);
+    if (linux.errno(taken) != .NOENT) return result;
+    return linux.renameat(at_cwd, source, files, dest);
 }
 
 pub fn reveal(path: []const u8) bool {
