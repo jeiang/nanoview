@@ -88,6 +88,16 @@ pub fn read_file(io: std.Io, path: []const u8, buffer: []u8) ![]u8 {
     return buffer[0..len];
 }
 
+/// The first bytes of the file, as many as fit `buffer`.
+pub fn read_head(io: std.Io, path: []const u8, buffer: []u8) ![]u8 {
+    assert(path.len > 0 and buffer.len > 0);
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const len = try file.readPositionalAll(io, buffer, 0);
+    assert(len <= buffer.len);
+    return buffer[0..len];
+}
+
 const testing = std.testing;
 
 test "from_file_url decodes local file URLs" {

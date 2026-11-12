@@ -15,6 +15,7 @@ const metadata_mod = @import("metadata.zig");
 const shell = @import("shell.zig");
 const keymap_mod = @import("keymap.zig");
 const recent_mod = @import("recent.zig");
+const sniff = @import("sniff.zig");
 const assert = std.debug.assert;
 
 pub const file_size_max = decode.file_size_max;
@@ -244,6 +245,9 @@ pub const State = struct {
         s.trash_pending = false;
         s.slideshow_at = null;
         s.selection.reset();
+        const opened = if (directory) "" else std.fs.path.basename(first);
+        s.folder.keep(opened);
+        s.selection.keep(opened);
         s.selection_only = !directory and files.len > 1;
         for (files[0..@min(files.len, folder_mod.entries_max)]) |file| {
             const real = s.resolve(file, &buf) orelse {
@@ -397,7 +401,7 @@ pub const State = struct {
         if (system) return .{ .encoded = bytes };
         const full = std.math.maxInt(u32);
         const size = decode.decode_fit(bytes, s.current_pixels, full, full) catch |err| {
-            const portable = folder_mod.is_baseline_name(s.basename());
+            const portable = if (sniff.detect(bytes)) |f| f.baseline() else false;
             if (err == error.Unavailable or portable) return .{ .encoded = bytes };
             return err;
         };

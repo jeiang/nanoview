@@ -22,7 +22,6 @@ pub var extensions: []const []const u8 = if (builtin.os.tag == .macos)
 else
     always_extensions;
 
-const baseline_extensions: []const []const u8 = &.{ "png", "jpg", "jpeg", "gif" };
 /// What opens with no system decoder: nanoui's formats, then the bundled decoders'.
 const always_extensions: []const []const u8 = &.{
     "png", "jpg", "jpeg", "gif", "bmp", "qoi", "tga", "webp",
@@ -48,16 +47,6 @@ pub fn init_extensions() void {
     assert(extensions.len <= extensions_max);
 }
 
-/// Whether nanoui's own decoders read this file: the fallback when a system
-/// decoder is missing or rejects the file.
-pub fn is_baseline_name(file_name: []const u8) bool {
-    const ext = extension(file_name);
-    for (baseline_extensions) |known| {
-        if (std.ascii.eqlIgnoreCase(ext, known)) return true;
-    }
-    return false;
-}
-
 pub const Entry = struct { offset: u32, len: u16, value: i64 = 0 };
 
 pub const Folder = struct {
@@ -66,6 +55,9 @@ pub const Folder = struct {
     entries: [entries_max]Entry = undefined,
     count: u32 = 0,
     order: sort_order.Order = .{},
+    /// A file the user opened: listed whatever its name, since its content decides.
+    kept_buf: [name_len_max]u8 = undefined,
+    kept_len: u32 = 0,
 
     pub fn reset(f: *Folder) void {
         f.names_len = 0;
@@ -73,10 +65,19 @@ pub const Folder = struct {
         assert(f.count == 0 and f.names_len == 0);
     }
 
+    /// Kept across scans until the next call; an empty name keeps none.
+    pub fn keep(f: *Folder, file_name: []const u8) void {
+        f.kept_len = if (file_name.len > name_len_max) 0 else @intCast(file_name.len);
+        @memcpy(f.kept_buf[0..f.kept_len], file_name[0..f.kept_len]);
+        assert(f.kept_len <= name_len_max);
+    }
+
     /// False when a limit stops it; a name that is not a picture is skipped.
     pub fn add(f: *Folder, file_name: []const u8) bool {
         assert(f.count <= entries_max and f.names_len <= names_bytes_max);
-        if (!is_image_name(file_name) or file_name.len > name_len_max) return true;
+        const kept = f.kept_len > 0 and std.mem.eql(u8, file_name, f.kept_buf[0..f.kept_len]);
+        if (!kept and !is_image_name(file_name)) return true;
+        if (file_name.len == 0 or file_name.len > name_len_max) return true;
         const len: u32 = @intCast(file_name.len);
         if (f.count == entries_max or names_bytes_max - f.names_len < len) return false;
         @memcpy(f.names[f.names_len..][0..len], file_name);
@@ -434,10 +435,16 @@ test "a shuffle is a permutation and find still works" {
     }
 }
 
-test "only nanoui's own formats fall back to its decoders" {
-    try testing.expect(is_baseline_name("a.PNG"));
-    try testing.expect(is_baseline_name("b.jpeg"));
-    try testing.expect(is_baseline_name("c.gif"));
-    try testing.expect(!is_baseline_name("d.webp"));
-    try testing.expect(!is_baseline_name("png"));
+test "the kept name is listed whatever its extension" {
+    const f = try testing.allocator.create(Folder);
+    defer testing.allocator.destroy(f);
+    f.* = .{};
+    f.keep("photo.dat");
+    for ([_][]const u8{ "photo.dat", "other.dat", "README" }) |n| try testing.expect(f.add(n));
+    try testing.expectEqual(@as(u32, 1), f.count);
+    try testing.expectEqualStrings("photo.dat", f.name(0));
+    f.reset();
+    f.keep("");
+    try testing.expect(f.add("photo.dat"));
+    try testing.expectEqual(@as(u32, 0), f.count);
 }
