@@ -72,7 +72,8 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "nanoui", .module = nanoui }},
         }),
     });
-    // The app does not call the wrappers yet; unreferenced decoder code is dropped at link.
+    // The app does not call the wrappers yet: the linker drops their code, though ELF
+    // builds still carry the C objects' debug info.
     add_decoders(b, exe.root_module);
     if (target.result.os.tag == .windows) {
         exe.subsystem = .windows;

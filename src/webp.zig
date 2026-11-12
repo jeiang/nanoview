@@ -14,10 +14,11 @@ pub const frames_max: u32 = 10000;
 pub const bytes_per_pixel: u32 = 4;
 
 pub const Error = error{
-    Malformed,
+    Corrupt,
     Truncated,
     Unsupported,
     TooLarge,
+    TooManyFrames,
     OutputTooSmall,
     WorkTooSmall,
     OutOfMemory,
@@ -42,7 +43,7 @@ pub const Frame = struct {
     /// Counts from 0 in display order.
     index: u32,
     /// As stored in the file; a viewer may raise tiny values to a minimum.
-    duration_ms: u32,
+    delay_ms: u32,
 };
 
 const Features = extern struct {
@@ -106,7 +107,7 @@ fn check(status: c_int) Error!void {
         .out_of_memory => error.OutOfMemory,
         .unsupported_feature => error.Unsupported,
         .not_enough_data, .suspended => error.Truncated,
-        else => error.Malformed,
+        else => error.Corrupt,
     };
 }
 
@@ -149,14 +150,14 @@ fn read_info(bytes: []const u8) Error!Info {
         info.frame_count = canvas.frame_count;
         info.loop_count = canvas.loop_count;
     }
-    if (info.frame_count == 0) return error.Malformed;
+    if (info.frame_count == 0) return error.Corrupt;
     return info;
 }
 
 fn demux_open(bytes: []const u8) Error!*anyopaque {
     var demux: ?*anyopaque = null;
     try check(nv_webp_demux_new(bytes.ptr, bytes.len, &demux));
-    return demux orelse error.Malformed;
+    return demux orelse error.Corrupt;
 }
 
 /// Checks the header sizes only, so a hostile file is refused before libwebp
@@ -195,8 +196,8 @@ pub fn decode_first(bytes: []const u8, out_bgra: []u8, work: []u8) Error!Size {
     var info: Canvas = undefined;
     nv_webp_demux_canvas(demux, &info);
     assert(info.width == size.width and info.height == size.height);
-    if (info.frame_count == 0) return error.Malformed;
-    if (info.frame_count > frames_max) return error.TooLarge;
+    if (info.frame_count == 0) return error.Corrupt;
+    if (info.frame_count > frames_max) return error.TooManyFrames;
     var frame: FrameC = undefined;
     try check(nv_webp_demux_frame(demux, 1, &frame));
     // Over a transparent canvas, blending and replacing give the same pixels.
@@ -213,8 +214,8 @@ const Rect = struct {
 };
 
 fn frame_rect(frame: FrameC, width: u32, height: u32) Error!Rect {
-    if (@as(u64, frame.x) + frame.width > width) return error.Malformed;
-    if (@as(u64, frame.y) + frame.height > height) return error.Malformed;
+    if (@as(u64, frame.x) + frame.width > width) return error.Corrupt;
+    if (@as(u64, frame.y) + frame.height > height) return error.Corrupt;
     assert(frame.width > 0 and frame.height > 0);
     return .{ .x = frame.x, .y = frame.y, .width = frame.width, .height = frame.height };
 }
@@ -299,10 +300,10 @@ pub const Animation = struct {
         var info: Canvas = undefined;
         nv_webp_demux_canvas(demux, &info);
         if (info.width != features.width or info.height != features.height) {
-            return error.Malformed;
+            return error.Corrupt;
         }
-        if (info.frame_count == 0) return error.Malformed;
-        if (info.frame_count > frames_max) return error.TooLarge;
+        if (info.frame_count == 0) return error.Corrupt;
+        if (info.frame_count > frames_max) return error.TooManyFrames;
         var animation: Animation = .{
             .demux = demux,
             .width = info.width,
@@ -361,7 +362,7 @@ pub const Animation = struct {
         if (frame.dispose_background != 0) self.dispose = rect;
         @memcpy(canvas[0..self.canvas.len], self.canvas);
         self.frame_next += 1;
-        return .{ .index = self.frame_next - 1, .duration_ms = frame.duration_ms };
+        return .{ .index = self.frame_next - 1, .delay_ms = frame.duration_ms };
     }
 };
 
@@ -402,7 +403,7 @@ fn expect_broken(result: anytype) !void {
     if (result) |_| {
         return error.TestUnexpectedResult;
     } else |err| {
-        try testing.expect(err == error.Malformed or err == error.Truncated);
+        try testing.expect(err == error.Corrupt or err == error.Truncated);
     }
 }
 
@@ -453,10 +454,10 @@ test "webp animation probe and first frame" {
 
 fn expect_anim_frames(animation: *Animation, canvas: []u8) !void {
     const first = (try animation.next(canvas)).?;
-    try testing.expectEqual(Frame{ .index = 0, .duration_ms = 100 }, first);
+    try testing.expectEqual(Frame{ .index = 0, .delay_ms = 100 }, first);
     for (0..4) |index| try expect_pixel(canvas, index, bgra_red, 0);
     const second = (try animation.next(canvas)).?;
-    try testing.expectEqual(Frame{ .index = 1, .duration_ms = 250 }, second);
+    try testing.expectEqual(Frame{ .index = 1, .delay_ms = 250 }, second);
     try expect_pixel(canvas, 0, bgra_red, 0);
     for (1..4) |index| try expect_pixel(canvas, index, bgra_blue, 0);
     try testing.expectEqual(@as(?Frame, null), try animation.next(canvas));

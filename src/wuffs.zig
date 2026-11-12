@@ -42,6 +42,9 @@ pub const Info = struct {
     format: Format,
     /// Plays of the whole animation; 0 means forever and is also what still pictures report.
     loop_count: u32,
+    /// True for APNG and for every GIF: a GIF's frame count needs a scan of the whole file,
+    /// so `Animation.next` returning null after the first frame is the final answer.
+    animated: bool,
     /// Bytes of `work` that `decode_first` needs for this picture.
     work_size_still: u64,
     /// Bytes of `work` that `Animation.init` needs for this picture.
@@ -128,7 +131,34 @@ pub fn probe(bytes: []const u8) ?Info {
     var bridge: BridgeInfo = undefined;
     const status = status_of(nanoview_wuffs_probe(bytes.ptr, bytes.len, &bridge));
     if (status != .ok) return null;
-    return info_from(bridge) catch null;
+    var info = info_from(bridge) catch return null;
+    info.animated = switch (info.format) {
+        .gif => true,
+        .png => png_has_actl(bytes),
+        .bmp, .qoi, .tga => false,
+    };
+    return info;
+}
+
+const png_chunks_max: u32 = 4096;
+
+/// Walks the chunks before the first IDAT; an acTL chunk there makes a PNG an APNG.
+fn png_has_actl(bytes: []const u8) bool {
+    const signature_len = 8;
+    assert(bytes.len >= signature_len);
+    var offset: usize = signature_len;
+    var chunk: u32 = 0;
+    while (chunk < png_chunks_max and bytes.len - offset >= 8) : (chunk += 1) {
+        const length = std.mem.readInt(u32, bytes[offset..][0..4], .big);
+        const kind = bytes[offset + 4 ..][0..4];
+        if (std.mem.eql(u8, kind, "acTL")) return true;
+        if (std.mem.eql(u8, kind, "IDAT")) return false;
+        // Length, type, data and CRC.
+        const step = @as(u64, length) + 12;
+        if (step > bytes.len - offset) return false;
+        offset += @intCast(step);
+    }
+    return false;
 }
 
 /// Decodes the first frame, composited on transparent black, into `out_bgra`.
@@ -331,6 +361,7 @@ fn info_from(bridge: BridgeInfo) Error!Info {
         .height = bridge.height,
         .format = format,
         .loop_count = bridge.loop_count,
+        .animated = false,
         .work_size_still = still,
         .work_size_animation = still + pixels * bytes_per_pixel,
     };
@@ -530,6 +561,10 @@ test "wuffs probe reads headers and rejects what it cannot decode" {
     try testing.expectEqual(@as(u32, 3), gif.width);
     try testing.expectEqual(@as(u32, 3), gif.loop_count);
     try testing.expectEqual(@as(u32, 4), probe(apng_animation).?.loop_count);
+    try testing.expect(probe(apng_animation).?.animated);
+    try testing.expect(gif.animated);
+    try testing.expect(!probe(png_2x1).?.animated);
+    try testing.expect(!bmp.animated);
     try testing.expect(probe(png_2x1).?.work_size_still <= testing_work_size);
     try testing.expectEqual(@as(?Info, null), probe(""));
     try testing.expectEqual(@as(?Info, null), probe("not a picture at all"));
