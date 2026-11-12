@@ -31,7 +31,7 @@ section that matches its tag.
 - Windows: pictures with an embedded color profile are converted to sRGB.
 - `settings.conf`, read at startup: fit, zoom, loop, slideshow and trash options.
 - Settings for the background color, when and how far the window follows the picture, the
-  sort order, the title text, a hidden title bar (Windows) and always on top (`t`).
+  sort order, the title text, a hidden title bar (Windows, Linux) and always on top (`t`).
 - Keys can be rebound with `key.<action>` lines in `settings.conf`.
 - Opened files and folders are remembered in a recent list.
 - Rename in the window (F2), put back the last trashed picture (Cmd/Ctrl+Z, not on Windows),

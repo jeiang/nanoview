@@ -135,7 +135,7 @@ and the window names the first such line.
 | `sort` | `system` | `system`, `name`, `kind`, `size`, `date_modified`, `date_created`, `random` |
 | `sort_descending` | `false` | `true`, `false`: no effect with `system` or `random` |
 | `title` | `name` | `name`, `name_position`, `full`, `none`: the window title |
-| `title_bar` | `default` | `default`, `hidden`: Windows only |
+| `title_bar` | `default` | `default`, `hidden`: Windows and Linux; drag the top of the window to move it |
 | `always_on_top` | `false` | `true`, `false`: no effect on GTK 4 |
 | `recent` | `true` | `true`, `false`: remember the last 10 opened files and folders |
 | `single_instance` | `false` | `true`, `false`: a second start hands its files to the open window |
