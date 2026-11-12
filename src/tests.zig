@@ -192,6 +192,35 @@ test "zooming past the preloaded pixels reads the file" {
     try testing.expect(!f.state.viewport.fit);
 }
 
+test "ImageIO formats display directly and from preloaded pixels" {
+    if (@import("builtin").os.tag != .macos) return error.SkipZigTest;
+    const formats = .{ "psd", "icns", "exr", "tga", "jp2", "pbm", "sgi", "jpe", "jfif" };
+    inline for (formats) |format| {
+        const f = try Fixture.create();
+        defer f.destroy();
+        const fixture = comptime if (std.mem.eql(u8, format, "jpe") or std.mem.eql(u8, format, "jfif"))
+            "jpeg"
+        else
+            format;
+        try f.write_png("a.png", 32, 32);
+        try f.tmp.dir.writeFile(testing.io, .{
+            .sub_path = "b." ++ format,
+            .data = @embedFile("testdata/format." ++ fixture),
+        });
+        try f.open("b." ++ format);
+        try testing.expectEqual(app.Status.shown, f.state.status);
+        try testing.expect(!f.tester.containsText("Cannot show"));
+        try f.open("a.png");
+        f.state.preload.set_bounds(960, 720);
+        _ = drain(&f.state.preload);
+        _ = f.tester.shortcut(.{ .key = ui.Shortcut.right });
+        try testing.expectEqual(app.Status.shown, f.state.status);
+        try testing.expect(f.state.source == .pixels);
+        try testing.expect(f.state.preload.pinned != null);
+        try testing.expect(!f.tester.containsText("Cannot show"));
+    }
+}
+
 test "opening another folder empties the slots" {
     const f = try Fixture.create();
     defer f.destroy();
