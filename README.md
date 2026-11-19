@@ -161,8 +161,9 @@ Linux and `%LOCALAPPDATA%\nanoview\recent` on Windows.
 
 With `single_instance = true`, a second nanoview hands its files to the running one and
 exits. On Linux this needs `XDG_RUNTIME_DIR`; without it the setting is off and the window
-says so. On macOS the app already opens files in its running window; the setting adds the
-same for `nanoview` started from a terminal.
+says so. With the setting off, every start opens its own window. On macOS that includes
+pictures opened from Finder while a window shows one; with it on they replace that picture, and
+`nanoview` started from a terminal hands its files over too.
 
 ### Linux and Windows
 
