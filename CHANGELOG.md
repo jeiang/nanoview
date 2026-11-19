@@ -22,6 +22,8 @@ section that matches its tag.
   bar, with the current keys, check marks and the recent files.
 - Animated GIF, APNG and WebP play, with pause (`k`), next frame (`.`) and speed (`[`, `]`);
   the `animation` setting turns it off.
+- macOS: a picture opened from Finder while another is shown opens in a new window, unless
+  `single_instance` is set.
 - Pages of multi-page TIFF and multi-size ICO files (Alt+Down, Alt+Up) on macOS and Windows.
 - Save the shown frame or page as PNG (Cmd/Ctrl+Shift+S).
 - EXIF details (`e`): camera, lens, date, exposure, GPS and color profile, from JPEG, TIFF-based

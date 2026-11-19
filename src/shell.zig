@@ -71,6 +71,47 @@ pub fn reveal(path: []const u8) void {
     if (!selected) native.showInFolder(path);
 }
 
+/// macOS: `files` in a new nanoview process, as `open -n` would. False
+/// when this process is not an app bundle, which LaunchServices cannot start.
+/// LaunchServices answers later: `failed(ctx)` runs on the main thread if it
+/// could not start one.
+pub fn open_in_new_instance(
+    files: []const []const u8,
+    ctx: *anyopaque,
+    comptime failed: fn (?*anyopaque) callconv(.c) void,
+) bool {
+    comptime assert(builtin.os.tag == .macos);
+    assert(files.len > 0 and files.len <= @import("folder.zig").entries_max);
+    const objc = @import("nanoui").objc;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const bundle = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
+    const bundle_path = objc.fromNSString(objc.msg(?objc.Object, bundle, "bundlePath", .{}));
+    if (!std.mem.endsWith(u8, bundle_path, ".app")) return false;
+    const urls = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
+    for (files) |file| {
+        const name = objc.nsString(file);
+        const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{name});
+        objc.msg(void, urls, "addObject:", .{url});
+    }
+    const config_class = objc.class("NSWorkspaceOpenConfiguration");
+    const config = objc.msg(objc.Object, config_class, "configuration", .{});
+    objc.msg(void, config, "setCreatesNewApplicationInstance:", .{objc.YES});
+    const workspace = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
+    const app_url = objc.msg(objc.Object, bundle, "bundleURL", .{});
+    const open = "openURLs:withApplicationAtURL:configuration:completionHandler:";
+    const Done = struct {
+        // On a LaunchServices queue: only hand the failure to the main thread.
+        fn done(c: *anyopaque, _: ?objc.Object, err: ?objc.Object) void {
+            if (err != null) objc.dispatchMain(c, failed);
+        }
+    };
+    var block = objc.Block(anyopaque, &.{ ?objc.Object, ?objc.Object }).init(ctx, Done.done);
+    const handler: *anyopaque = @ptrCast(&block);
+    objc.msg(void, workspace, open, .{ urls, app_url, config, handler });
+    return true;
+}
+
 pub fn escaped(path: []const u8, out: []u8) ?[]const u8 {
     assert(path.len <= paths.path_max);
     var w: std.Io.Writer = .fixed(out);

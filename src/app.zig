@@ -954,10 +954,24 @@ pub const State = struct {
         if (s.window) |w| w.focus();
     }
 
+    /// Files from Finder: LaunchServices hands them to the running app, but a
+    /// shown picture keeps its window unless `single_instance` is set.
     pub fn on_open_files(ctx: *anyopaque, files: []const []const u8) void {
         const s: *State = @ptrCast(@alignCast(ctx));
         assert(s.path_len <= paths.path_max);
+        if (builtin.os.tag == .macos and files.len > 0 and s.status != .empty and
+            !s.settings.single_instance)
+        {
+            const bounded = files[0..@min(files.len, folder_mod.entries_max)];
+            if (shell.open_in_new_instance(bounded, s, new_window_failed)) return;
+        }
         s.open_paths(files);
+    }
+
+    fn new_window_failed(ctx: ?*anyopaque) callconv(.c) void {
+        const s: *State = @ptrCast(@alignCast(ctx.?));
+        assert(s.path_len <= paths.path_max);
+        s.notify("Could not open a new window", .{});
     }
 
     /// Promoted pixels get their own prefix, as bytes do: nanoui caches a
